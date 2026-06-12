@@ -28,10 +28,6 @@ export default function ProductSelectionPage() {
       .then((data) => {
         if (Array.isArray(data)) {
           setProducts(data)
-          // If only one product, redirect directly to dashboard
-          if (data.length === 1) {
-            selectProduct(data[0].id)
-          }
         }
       })
       .catch(() => {})

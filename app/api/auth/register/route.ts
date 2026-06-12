@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs'
 import { z } from 'zod'
 import { prisma } from '@/lib/db'
 import { generateOrgSlug } from '@/lib/utils'
-import { ROLE_DEFAULTS } from '@/lib/permissions'
+import { ROLE_DEFAULTS, DEPARTMENT_ROLE_MAP } from '@/lib/permissions'
 
 const registerSchema = z.object({
   name: z.string().min(1),
@@ -11,6 +11,9 @@ const registerSchema = z.object({
   organizationName: z.string().min(1).optional(),
   orgName: z.string().min(1).optional(),
   password: z.string().min(8),
+  department: z.string().optional(),
+  requestedRole: z.string().optional(),
+  reason: z.string().optional(),
 })
 
 export async function POST(req: Request) {
@@ -25,8 +28,49 @@ export async function POST(req: Request) {
     }
 
     const passwordHash = await bcrypt.hash(parsed.password, 12)
-    const slug = generateOrgSlug(orgName)
 
+    // Check if any organization exists — first user of an org gets PM role (approved)
+    // Subsequent users get PENDING status
+    const existingOrg = await prisma.organization.findFirst()
+
+    if (existingOrg) {
+      // Join existing org as PENDING user
+      const department = parsed.department || 'OTHER'
+      const role = DEPARTMENT_ROLE_MAP[department] || 'VIEWER'
+
+      const user = await prisma.user.create({
+        data: {
+          name: parsed.name,
+          email: parsed.email,
+          passwordHash,
+          role,
+          status: 'PENDING',
+          organizationId: existingOrg.id,
+          permissionsJson: JSON.stringify(ROLE_DEFAULTS[role] || ROLE_DEFAULTS.VIEWER),
+        },
+      })
+
+      // Create access request for admin to review
+      await prisma.accessRequest.create({
+        data: {
+          name: parsed.name,
+          email: parsed.email,
+          requestedRole: role,
+          organizationId: existingOrg.id,
+          reason: parsed.reason || `Department: ${department}`,
+          status: 'PENDING',
+        },
+      })
+
+      return NextResponse.json({
+        success: true,
+        pending: true,
+        message: 'Your account has been created and is pending admin approval.',
+      }, { status: 201 })
+    }
+
+    // First org ever — create org + first user as PM (approved), not SUPER_ADMIN
+    const slug = generateOrgSlug(orgName)
     const org = await prisma.organization.create({
       data: {
         name: orgName,
@@ -36,16 +80,16 @@ export async function POST(req: Request) {
             name: parsed.name,
             email: parsed.email,
             passwordHash,
-            role: 'SUPER_ADMIN',
+            role: 'PM',
             status: 'APPROVED',
-            permissionsJson: JSON.stringify(ROLE_DEFAULTS.SUPER_ADMIN),
+            permissionsJson: JSON.stringify(ROLE_DEFAULTS.PM),
           },
         },
       },
       include: { users: { select: { id: true } } },
     })
 
-    // Create a default product for the org
+    // Create a default product
     const product = await prisma.product.create({
       data: {
         name: 'Default Product',
@@ -55,7 +99,6 @@ export async function POST(req: Request) {
       },
     })
 
-    // Grant the creator access to the default product
     if (org.users[0]) {
       await prisma.userProductAccess.create({
         data: { userId: org.users[0].id, productId: product.id },

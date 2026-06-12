@@ -9,6 +9,8 @@ import { Loader2, Trophy, CheckCircle2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 
@@ -16,6 +18,8 @@ const registerSchema = z.object({
   name: z.string().min(2, 'Name must be at least 2 characters'),
   email: z.string().email('Please enter a valid email address'),
   organizationName: z.string().min(2, 'Organization name must be at least 2 characters'),
+  department: z.string().min(1, 'Please select a department'),
+  reason: z.string().optional(),
   password: z
     .string()
     .min(8, 'Password must be at least 8 characters')
@@ -29,6 +33,15 @@ const registerSchema = z.object({
 
 type RegisterFormData = z.infer<typeof registerSchema>
 
+const DEPARTMENTS = [
+  { value: 'PRODUCT', label: 'Product Management' },
+  { value: 'CSM', label: 'Customer Success (CSM)' },
+  { value: 'SALES', label: 'Sales' },
+  { value: 'PSD', label: 'Product Strategy & Design (PSD)' },
+  { value: 'ENGINEERING', label: 'Engineering' },
+  { value: 'OTHER', label: 'Other' },
+]
+
 const FEATURES = [
   'AI-powered competitive intelligence',
   'Auto-generated feature specs',
@@ -40,13 +53,16 @@ export default function RegisterPage() {
   const router = useRouter()
   const [serverError, setServerError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
+  const [submitted, setSubmitted] = useState(false)
 
   const {
     register,
     handleSubmit,
+    setValue,
     formState: { errors },
   } = useForm<RegisterFormData>({
     resolver: zodResolver(registerSchema),
+    defaultValues: { department: '' },
   })
 
   const onSubmit = async (data: RegisterFormData) => {
@@ -61,6 +77,8 @@ export default function RegisterPage() {
           name: data.name,
           email: data.email,
           organizationName: data.organizationName,
+          department: data.department,
+          reason: data.reason,
           password: data.password,
         }),
       })
@@ -72,12 +90,44 @@ export default function RegisterPage() {
         return
       }
 
-      router.push('/login?registered=1')
-    } catch (err) {
+      if (body.pending) {
+        setSubmitted(true)
+      } else {
+        router.push('/login?registered=1')
+      }
+    } catch {
       setServerError('An unexpected error occurred. Please try again.')
     } finally {
       setIsLoading(false)
     }
+  }
+
+  if (submitted) {
+    return (
+      <div className="w-full max-w-md px-4">
+        <div className="flex justify-center mb-8">
+          <div className="flex items-center gap-2">
+            <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
+              <Trophy className="h-5 w-5 text-primary-foreground" />
+            </div>
+            <span className="text-2xl font-bold text-gray-900">ProductOS</span>
+          </div>
+        </div>
+        <Card className="shadow-lg border-0 bg-white/80 backdrop-blur-sm">
+          <CardContent className="pt-8 pb-8 text-center space-y-4">
+            <CheckCircle2 className="h-16 w-16 text-green-500 mx-auto" />
+            <h2 className="text-xl font-bold">Account Created</h2>
+            <p className="text-muted-foreground text-sm">
+              Your account has been created and is pending admin approval.
+              You will be able to log in once an admin approves your request.
+            </p>
+            <Button variant="outline" onClick={() => router.push('/login')}>
+              Back to Login
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    )
   }
 
   return (
@@ -112,11 +162,6 @@ export default function RegisterPage() {
               </li>
             ))}
           </ul>
-
-          <div className="rounded-lg bg-primary/5 border border-primary/10 p-4">
-            <p className="text-sm font-medium text-primary">Free 14-day trial</p>
-            <p className="text-xs text-gray-500 mt-1">No credit card required. Full access to all features.</p>
-          </div>
         </div>
 
         {/* Right: Registration form */}
@@ -124,7 +169,7 @@ export default function RegisterPage() {
           <CardHeader className="space-y-1 pb-4">
             <CardTitle className="text-xl font-bold">Create your account</CardTitle>
             <CardDescription>
-              Set up your workspace in under a minute
+              Set up your profile — an admin will review and approve your access
             </CardDescription>
           </CardHeader>
 
@@ -137,118 +182,72 @@ export default function RegisterPage() {
 
             <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
               <div className="space-y-2">
-                <Label htmlFor="name">Your full name</Label>
-                <Input
-                  id="name"
-                  type="text"
-                  placeholder="Jane Smith"
-                  autoComplete="name"
-                  disabled={isLoading}
-                  {...register('name')}
-                  className={errors.name ? 'border-destructive' : ''}
-                />
-                {errors.name && (
-                  <p className="text-xs text-destructive">{errors.name.message}</p>
-                )}
+                <Label htmlFor="name">Full Name</Label>
+                <Input id="name" placeholder="Jane Smith" disabled={isLoading}
+                  {...register('name')} className={errors.name ? 'border-destructive' : ''} />
+                {errors.name && <p className="text-xs text-destructive">{errors.name.message}</p>}
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="organizationName">Organization name</Label>
-                <Input
-                  id="organizationName"
-                  type="text"
-                  placeholder="Acme Corp"
-                  autoComplete="organization"
-                  disabled={isLoading}
-                  {...register('organizationName')}
-                  className={errors.organizationName ? 'border-destructive' : ''}
-                />
-                {errors.organizationName && (
-                  <p className="text-xs text-destructive">{errors.organizationName.message}</p>
-                )}
+                <Label htmlFor="email">Work Email</Label>
+                <Input id="email" type="email" placeholder="jane@company.com" disabled={isLoading}
+                  {...register('email')} className={errors.email ? 'border-destructive' : ''} />
+                {errors.email && <p className="text-xs text-destructive">{errors.email.message}</p>}
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="email">Work email</Label>
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="jane@acmecorp.com"
-                  autoComplete="email"
-                  disabled={isLoading}
-                  {...register('email')}
-                  className={errors.email ? 'border-destructive' : ''}
-                />
-                {errors.email && (
-                  <p className="text-xs text-destructive">{errors.email.message}</p>
-                )}
+                <Label htmlFor="organizationName">Organization</Label>
+                <Input id="organizationName" placeholder="Acme Corp" disabled={isLoading}
+                  {...register('organizationName')} className={errors.organizationName ? 'border-destructive' : ''} />
+                {errors.organizationName && <p className="text-xs text-destructive">{errors.organizationName.message}</p>}
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="password">Password</Label>
-                <Input
-                  id="password"
-                  type="password"
-                  placeholder="Min 8 chars, 1 uppercase, 1 number"
-                  autoComplete="new-password"
-                  disabled={isLoading}
-                  {...register('password')}
-                  className={errors.password ? 'border-destructive' : ''}
-                />
-                {errors.password && (
-                  <p className="text-xs text-destructive">{errors.password.message}</p>
-                )}
+                <Label>Department / Role</Label>
+                <Select onValueChange={(v) => setValue('department', v)}>
+                  <SelectTrigger className={errors.department ? 'border-destructive' : ''}>
+                    <SelectValue placeholder="Select your department" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DEPARTMENTS.map((d) => (
+                      <SelectItem key={d.value} value={d.value}>{d.label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.department && <p className="text-xs text-destructive">{errors.department.message}</p>}
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="confirmPassword">Confirm password</Label>
-                <Input
-                  id="confirmPassword"
-                  type="password"
-                  placeholder="Repeat your password"
-                  autoComplete="new-password"
-                  disabled={isLoading}
-                  {...register('confirmPassword')}
-                  className={errors.confirmPassword ? 'border-destructive' : ''}
-                />
-                {errors.confirmPassword && (
-                  <p className="text-xs text-destructive">{errors.confirmPassword.message}</p>
-                )}
+                <Label htmlFor="reason">Why do you need access? (optional)</Label>
+                <Textarea id="reason" placeholder="Brief description of your role and what products you'll work on"
+                  rows={2} disabled={isLoading} {...register('reason')} />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input id="password" type="password" placeholder="Min 8 chars" disabled={isLoading}
+                    {...register('password')} className={errors.password ? 'border-destructive' : ''} />
+                  {errors.password && <p className="text-xs text-destructive">{errors.password.message}</p>}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirmPassword">Confirm</Label>
+                  <Input id="confirmPassword" type="password" placeholder="Repeat" disabled={isLoading}
+                    {...register('confirmPassword')} className={errors.confirmPassword ? 'border-destructive' : ''} />
+                  {errors.confirmPassword && <p className="text-xs text-destructive">{errors.confirmPassword.message}</p>}
+                </div>
               </div>
 
               <Button type="submit" className="w-full" disabled={isLoading}>
-                {isLoading ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Creating account...
-                  </>
-                ) : (
-                  'Create free account'
-                )}
+                {isLoading ? (<><Loader2 className="h-4 w-4 animate-spin" /> Creating account...</>) : 'Create account'}
               </Button>
-
-              <p className="text-xs text-center text-muted-foreground">
-                By creating an account, you agree to our{' '}
-                <Link href="/terms" className="hover:text-primary underline underline-offset-4">
-                  Terms
-                </Link>{' '}
-                and{' '}
-                <Link href="/privacy" className="hover:text-primary underline underline-offset-4">
-                  Privacy Policy
-                </Link>
-              </p>
             </form>
           </CardContent>
 
           <CardFooter className="flex justify-center pt-0">
             <p className="text-sm text-muted-foreground">
               Already have an account?{' '}
-              <Link
-                href="/login"
-                className="font-medium text-primary hover:underline underline-offset-4"
-              >
-                Sign in
-              </Link>
+              <Link href="/login" className="font-medium text-primary hover:underline underline-offset-4">Sign in</Link>
             </p>
           </CardFooter>
         </Card>

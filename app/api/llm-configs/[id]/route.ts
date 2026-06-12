@@ -36,6 +36,41 @@ export async function DELETE(_: Request, { params }: { params: { id: string } })
   } catch { return NextResponse.json({ error: 'Error' }, { status: 500 }) }
 }
 
+export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+  try {
+    const orgId = await getOrgId()
+    const existing = await prisma.lLMConfig.findFirst({ where: { id: params.id, organizationId: orgId } })
+    if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    const body = await req.json()
+
+    const updateData: Record<string, unknown> = {}
+
+    if (body.label !== undefined) updateData.label = body.label
+    if (body.defaultModel !== undefined) updateData.defaultModel = body.defaultModel
+    if (body.provider !== undefined) updateData.provider = body.provider
+    if (body.isActive !== undefined) {
+      updateData.isActive = body.isActive
+      if (body.isActive) {
+        await prisma.lLMConfig.updateMany({ where: { organizationId: orgId }, data: { isActive: false } })
+      }
+    }
+
+    // Re-encrypt if a new API key is provided
+    if (body.apiKey && body.apiKey.trim() !== '') {
+      const { ciphertext, iv } = encrypt(body.apiKey)
+      updateData.apiKeyEncrypted = ciphertext
+      updateData.iv = iv
+    }
+
+    const updated = await prisma.lLMConfig.update({ where: { id: params.id }, data: updateData })
+    return NextResponse.json({ ...updated, apiKeyEncrypted: maskApiKey('hidden'), iv: undefined })
+  } catch (e: unknown) {
+    console.error('PATCH /api/llm-configs/[id] error:', e)
+    const msg = e instanceof Error ? e.message : 'Unexpected error'
+    return NextResponse.json({ error: msg }, { status: 500 })
+  }
+}
+
 // Test connection with stored key
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {

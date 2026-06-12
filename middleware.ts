@@ -32,7 +32,8 @@ export default async function middleware(req: NextRequest) {
   // Admin routes — only SUPER_ADMIN and ADMIN
   if (ADMIN_PATHS.some((p) => pathname.startsWith(p))) {
     const role = (token as any).role
-    if (role !== 'SUPER_ADMIN' && role !== 'ADMIN') {
+    const adminRoles = ['SUPER_ADMIN', 'ADMIN', 'SENIOR_PM', 'PM']
+    if (!adminRoles.includes(role)) {
       return NextResponse.redirect(new URL('/access-denied', req.url))
     }
   }

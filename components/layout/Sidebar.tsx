@@ -79,8 +79,8 @@ export function Sidebar() {
   useEffect(() => { setMounted(true) }, [])
   const selectedProductName = mounted ? storeProductName : null
 
-  const userRole = (session?.user as { role?: string })?.role
-  const isAdmin = userRole === 'ADMIN' || userRole === 'SUPER_ADMIN'
+  const userRole = (session?.user as { role?: string })?.role || ''
+  const isAdminUser = ['SUPER_ADMIN', 'SENIOR_PM', 'PM', 'ADMIN'].includes(userRole)
 
   return (
     <TooltipProvider delayDuration={0}>
@@ -129,7 +129,7 @@ export function Sidebar() {
         </nav>
 
         {/* Admin Section */}
-        {isAdmin && (
+        {isAdminUser && (
           <div className="border-t px-2 py-2">
             {!collapsed && (
               <div className="flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-muted-foreground uppercase tracking-wider">
