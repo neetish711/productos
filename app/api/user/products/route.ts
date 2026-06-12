@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authConfig } from '@/lib/auth/config'
 import { prisma } from '@/lib/db'
-import { isAdmin } from '@/lib/permissions'
+import { canAccessAdminPanel } from '@/lib/permissions'
 
 // GET products the current user has access to
 export async function GET() {
@@ -12,8 +12,8 @@ export async function GET() {
 
     const orgId = session.user.organizationId
 
-    // Admins see all products in the org
-    if (isAdmin(session.user.role)) {
+    // Admin-level roles see all products in the org
+    if (canAccessAdminPanel(session.user.role)) {
       const products = await prisma.product.findMany({
         where: { organizationId: orgId, status: 'ACTIVE' },
         include: {
@@ -24,7 +24,7 @@ export async function GET() {
       return NextResponse.json(products)
     }
 
-    // Non-admins see only assigned products
+    // Others see only assigned products
     const access = await prisma.userProductAccess.findMany({
       where: { userId: session.user.id },
       include: {

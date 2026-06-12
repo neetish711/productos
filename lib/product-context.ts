@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers'
 import { prisma } from '@/lib/db'
-import { isAdmin } from '@/lib/permissions'
+import { canAccessAdminPanel } from '@/lib/permissions'
 
 const COOKIE_NAME = 'selectedProductId'
 
@@ -23,7 +23,7 @@ export async function getSelectedProductId(
 
   if (cookieProductId) {
     // Verify user has access to this product
-    if (isAdmin(userRole)) {
+    if (canAccessAdminPanel(userRole)) {
       const exists = await prisma.product.findFirst({
         where: { id: cookieProductId, organizationId: orgId, status: 'ACTIVE' },
         select: { id: true },
@@ -39,7 +39,7 @@ export async function getSelectedProductId(
   }
 
   // Fallback: first accessible product
-  if (isAdmin(userRole)) {
+  if (canAccessAdminPanel(userRole)) {
     const first = await prisma.product.findFirst({
       where: { organizationId: orgId, status: 'ACTIVE' },
       select: { id: true },
@@ -65,7 +65,7 @@ export async function getAccessibleProductIds(
   orgId: string,
   userRole: string,
 ): Promise<string[]> {
-  if (isAdmin(userRole)) {
+  if (canAccessAdminPanel(userRole)) {
     const products = await prisma.product.findMany({
       where: { organizationId: orgId, status: 'ACTIVE' },
       select: { id: true },
