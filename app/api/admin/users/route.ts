@@ -2,12 +2,12 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authConfig } from '@/lib/auth/config'
 import { prisma } from '@/lib/db'
-import { isAdmin } from '@/lib/permissions'
+import { canAccessAdminPanel } from '@/lib/permissions'
 
 export async function GET() {
   try {
     const session = await getServerSession(authConfig)
-    if (!session?.user || !isAdmin(session.user.role)) {
+    if (!session?.user || !canAccessAdminPanel(session.user.role)) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 

@@ -2,7 +2,7 @@ import { getServerSession } from 'next-auth'
 import { authConfig } from './config'
 import { redirect } from 'next/navigation'
 import { NextResponse } from 'next/server'
-import { hasPermission, isAdmin, type PermissionKey } from '@/lib/permissions'
+import { hasPermission, isAdmin, canAccessAdminPanel, type PermissionKey } from '@/lib/permissions'
 
 export async function getSession() {
   return getServerSession(authConfig)
@@ -28,7 +28,7 @@ export async function getOrgId(): Promise<string> {
 
 export async function requireAdmin() {
   const session = await requireAuth()
-  if (!isAdmin(session.user.role)) redirect('/access-denied')
+  if (!canAccessAdminPanel(session.user.role)) redirect('/access-denied')
   return session
 }
 
