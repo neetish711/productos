@@ -1,0 +1,998 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Organization & Auth ─────────────────────────────────────────────────────
+
+model Organization {
+  id                   String    @id @default(cuid())
+  name                 String
+  slug                 String    @unique
+  logoUrl              String?
+  settingsJson         String    @default("{}")
+  scoringConfigJson    String    @default("{}")
+  onboardingCompleted  Boolean   @default(false)
+  onboardingStep       Int       @default(1)
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  users                User[]
+  products             Product[]
+  competitors          Competitor[]
+  llmConfigs           LLMConfig[]
+  prompts              Prompt[]
+  workflowRuns         WorkflowRun[]
+  notifications        Notification[]
+  scheduledJobs        ScheduledRefreshJob[]
+  uploadedFiles        UploadedFile[]
+  battleCards          BattleCard[]
+  accounts             Account[]
+  promptExecutionLogs  PromptExecutionLog[]
+  importJobs           ImportJob[]
+  competitorReports    CompetitorReport[]
+  integrationConfigs   IntegrationConfig[]
+  accessRequests       AccessRequest[]
+
+  @@index([slug])
+}
+
+// ─── Integration Config ──────────────────────────────────────────────────────
+
+model IntegrationConfig {
+  id             String    @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  integrationType String    // LOVABLE | GITHUB | GOOGLE_CHAT | JIRA
+  status          String    @default("NOT_CONNECTED")
+  // NOT_CONNECTED | CONNECTED | CONNECTION_ERROR | RECONNECT_REQUIRED
+
+  apiKeyEncrypted String?
+  iv              String?
+  configJson      String    @default("{}")
+
+  connectedAt     DateTime?
+  connectedBy     String?
+  lastTestedAt    DateTime?
+  lastErrorAt     DateTime?
+  errorMessage    String?
+
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@unique([organizationId, integrationType])
+  @@index([organizationId])
+}
+
+model User {
+  id             String    @id @default(cuid())
+  organizationId String
+  email          String    @unique
+  name           String
+  passwordHash   String
+  role           String    @default("PM")
+  status         String    @default("APPROVED") // PENDING | APPROVED | REJECTED | DEACTIVATED
+  avatarUrl      String?
+  permissionsJson String   @default("[]") // JSON array of permission keys
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization     Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  specVersions     SpecVersion[]
+  notifications    Notification[]
+  sessions         Session[]
+  prdComments      PRDComment[]
+  productAccess    UserProductAccess[]
+  reviewedRequests AccessRequest[]     @relation("ReviewedBy")
+
+  @@index([organizationId])
+  @@index([email])
+  @@index([status])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Product & Features ──────────────────────────────────────────────────────
+
+model Product {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  description    String   @default("")
+  status         String   @default("ACTIVE") // ACTIVE | ARCHIVED
+  createdById    String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization        @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ourFeatures    OurFeature[]
+  roadmapItems   RoadmapItem[]
+  importJobs     ImportJob[]
+  userAccess     UserProductAccess[]
+
+  @@index([organizationId])
+}
+
+model OurFeature {
+  id                 String   @id @default(cuid())
+  productId          String
+  name               String
+  description        String   @default("")
+  category           String   @default("General")
+  status             String   @default("AVAILABLE")
+  tags               String   @default("[]")
+  sourceFileId       String?
+  // Intelligence fields
+  build              String?
+  owner              String?
+  coverImageUrl      String?
+  targetUsers        String   @default("")
+  valueProposition   String   @default("")
+  platform           String?
+  maturityLevel      String   @default("GA")
+  isCustomerFacing   Boolean  @default(true)
+  isFeatured         Boolean  @default(false)
+  docsLinks          String   @default("[]")
+  setupLinks         String   @default("[]")
+  designFiles        String   @default("[]")
+  releaseNotes       String   @default("")
+  competitorMappings String   @default("[]")
+  configDetails      String   @default("")
+  useCases           String   @default("")
+  metadataJson       String   @default("{}")
+  introducedInBuild  String?
+  updatedInBuild     String?
+  changelogJson      String   @default("[]")
+  contentBlocksJson  String   @default("[]")
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  product      Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  comparisons  Comparison[]
+  battleCards  BattleCard[]       @relation("BattleCardOurFeature")
+  questions    FeatureQuestion[]
+  solutions    FeatureSolution[]
+  feedbackItems FeatureFeedback[]
+
+  @@index([productId])
+  @@index([category])
+  @@index([status])
+}
+
+model FeatureQuestion {
+  id          String   @id @default(cuid())
+  featureId   String
+  question    String
+  askedBy     String   @default("Anonymous")
+  status      String   @default("OPEN")   // OPEN | ANSWERED
+  answersJson String   @default("[]")     // [{id, content, answeredBy, isBest, isApproved, createdAt}]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  feature     OurFeature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@index([featureId])
+  @@index([status])
+}
+
+model FeatureSolution {
+  id        String   @id @default(cuid())
+  featureId String
+  title     String
+  content   String
+  type      String   @default("FAQ")   // FAQ | SETUP | TROUBLESHOOT | OBJECTION | WORKAROUND | LIMITATION | SNIPPET
+  tags      String   @default("[]")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  feature   OurFeature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@index([featureId])
+  @@index([type])
+}
+
+model FeatureFeedback {
+  id          String   @id @default(cuid())
+  featureId   String
+  title       String
+  content     String   @default("")
+  type        String   @default("IMPROVEMENT")  // BUG | IMPROVEMENT | CUSTOMER_REQUEST | DOCS_ISSUE | CONFUSION | CONFIG_ISSUE | COMPETITIVE | ENABLEMENT_GAP
+  submittedBy String   @default("Anonymous")
+  status      String   @default("OPEN")         // OPEN | IN_REVIEW | ADDRESSED | CLOSED
+  tags        String   @default("[]")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  feature     OurFeature @relation(fields: [featureId], references: [id], onDelete: Cascade)
+
+  @@index([featureId])
+  @@index([status])
+  @@index([type])
+}
+
+// ─── Competitors ─────────────────────────────────────────────────────────────
+
+model Competitor {
+  id                   String    @id @default(cuid())
+  organizationId       String
+  productId            String?
+  name                 String
+  website              String    @default("")
+  description          String    @default("")
+  logoUrl              String?
+  monitoringEnabled    Boolean   @default(true)
+  refreshFrequencyDays Int       @default(15)
+  lastRefreshAt        DateTime?
+  setupStatus          String    @default("INCOMPLETE") // INCOMPLETE | ACTIVE | PAUSED | ERROR | RECENTLY_UPDATED | NEEDS_REFRESH
+  reportStatus         String    @default("NOT_GENERATED") // NOT_GENERATED | IN_PROGRESS | READY | STALE | FAILED
+  lastReportAt         DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  features             CompetitorFeature[]
+  comparisons          Comparison[]
+  keyUpdates           CompetitorKeyUpdate[]
+  battleCards          BattleCard[]          @relation("BattleCardCompetitor")
+  scheduledJobs        ScheduledRefreshJob[]
+  managedSources       CompetitorSource[]
+  reports              CompetitorReport[]
+
+  @@index([organizationId])
+}
+
+model CompetitorFeature {
+  id                      String   @id @default(cuid())
+  competitorId            String
+  name                    String
+  description             String   @default("")
+  category                String   @default("General")
+  sourcesJson             String   @default("[]")
+  prosText                String   @default("")
+  consText                String   @default("")
+  marketSentimentText     String   @default("")
+  enrichmentStatus        String   @default("PENDING")
+  matchedOurFeatureId     String?
+  matchStatus             String   @default("NO_MATCH")
+  matchConfidence         Float    @default(0)
+  roadmapImplicationText  String   @default("")
+  status                  String   @default("EXTRACTED") // EXTRACTED | NEEDS_REVIEW | LOW_CONFIDENCE | VALIDATED | STALE
+  officialSourceCount     Int      @default(0)
+  thirdPartySourceCount   Int      @default(0)
+  communitySourceCount    Int      @default(0)
+  lastExtractedAt         DateTime?
+  changeHistory           String?  // JSON: [{ date, from, to, source }]
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  competitor      Competitor       @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  sourceEvidence  SourceEvidence[]
+
+  @@index([competitorId])
+  @@index([matchStatus])
+}
+
+model SourceEvidence {
+  id                  String   @id @default(cuid())
+  competitorFeatureId String
+  url                 String
+  title               String   @default("")
+  snippet             String   @default("")
+  sourceType          String   @default("webpage")
+  confidence          Float    @default(0.5)
+  dateAccessed        DateTime @default(now())
+  screenshotPath      String?
+  createdAt           DateTime @default(now())
+
+  competitorFeature   CompetitorFeature @relation(fields: [competitorFeatureId], references: [id], onDelete: Cascade)
+
+  @@index([competitorFeatureId])
+}
+
+// ─── Comparisons ─────────────────────────────────────────────────────────────
+
+model Comparison {
+  id                           String   @id @default(cuid())
+  ourFeatureId                 String
+  competitorId                 String
+  similaritiesText             String   @default("")
+  differencesText              String   @default("")
+  enhancementOpportunitiesText String   @default("")
+  keyTakeawaysText             String   @default("")
+  positioning                  String   @default("NO_MATCH")
+  citationsJson                String   @default("[]")
+  deepReportMd                 String?
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  ourFeature  OurFeature  @relation(fields: [ourFeatureId], references: [id], onDelete: Cascade)
+  competitor  Competitor  @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@unique([ourFeatureId, competitorId])
+  @@index([ourFeatureId])
+  @@index([competitorId])
+}
+
+// ─── Roadmap ─────────────────────────────────────────────────────────────────
+
+model RoadmapItem {
+  id                   String    @id @default(cuid())
+  productId            String
+  title                String
+  description          String    @default("")
+  category             String    @default("General")
+  sourceType           String    @default("MANUAL")
+  sourceReferenceId    String?
+  sourceReferenceType  String?
+  status               String    @default("PROPOSED")
+  priorityScore        Float     @default(0)
+  riceReach            Float     @default(0)
+  riceImpact           Float     @default(0)
+  riceConfidence       Float     @default(0)
+  riceEffort           Float     @default(1)
+  scoringInputsJson    String    @default("{}")
+  sortOrder            Int       @default(0)
+  specId               String?   @unique
+  voiceTranscriptText  String?
+  referenceDocsJson    String    @default("[]")
+  targetQuarter        String?
+  isAiSuggested        Boolean   @default(false)
+  aiRationale          String?
+  aiConfidence         Float?
+  dismissedAt          DateTime?
+  // Jira
+  jiraKey              String?
+  jiraStatus           String?
+  jiraLastSyncAt       DateTime?
+  // Extended fields
+  duplicatedFromId     String?
+  notes                String    @default("")
+  specStatus           String    @default("NO_SPEC")
+  isDraft              Boolean   @default(false)
+  // Prototype / Lovable
+  prototypeStatus          String   @default("NONE")
+  lovableProjectUrl        String?
+  lovableProjectId         String?
+  githubRepoUrl            String?
+  githubBranch             String?
+  githubCommitRef          String?
+  engineeringHandoffStatus String   @default("NOT_STARTED")
+  prototypeIterationCount  Int      @default(0)
+  lastPublishedAt          DateTime?
+  lastPublishedBy          String?
+  sourcePrdVersionId       String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  product              Product             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  spec                 Spec?
+  activities           RoadmapActivity[]
+  dependenciesFrom     RoadmapDependency[] @relation("DependencyFrom")
+  dependenciesTo       RoadmapDependency[] @relation("DependencyTo")
+  prototypePublishes   PrototypePublish[]
+
+  @@index([productId])
+  @@index([status])
+  @@index([sortOrder])
+  @@index([specStatus])
+  @@index([prototypeStatus])
+}
+
+// ─── Import Jobs ──────────────────────────────────────────────────────────────
+
+model ImportJob {
+  id              String    @id @default(cuid())
+  organizationId  String
+  productId       String
+  filename        String
+  originalName    String
+  fileType        String
+  status          String    @default("PENDING")
+  rowCount        Int       @default(0)
+  importedCount   Int       @default(0)
+  mappingJson     String    @default("{}")
+  parsedDataJson  String    @default("[]")
+  errorMessage    String?
+  createdAt       DateTime  @default(now())
+  completedAt     DateTime?
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product         Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([productId])
+  @@index([status])
+}
+
+// ─── Roadmap Activity (Audit Trail) ──────────────────────────────────────────
+
+model RoadmapActivity {
+  id            String    @id @default(cuid())
+  roadmapItemId String
+  specId        String?
+  eventType     String
+  actorId       String?
+  actorName     String    @default("System")
+  actorType     String    @default("USER")
+  metadataJson  String    @default("{}")
+  createdAt     DateTime  @default(now())
+
+  roadmapItem   RoadmapItem @relation(fields: [roadmapItemId], references: [id], onDelete: Cascade)
+
+  @@index([roadmapItemId])
+  @@index([specId])
+  @@index([createdAt])
+}
+
+// ─── Roadmap Dependencies ─────────────────────────────────────────────────────
+
+model RoadmapDependency {
+  id               String    @id @default(cuid())
+  fromItemId       String
+  toItemId         String
+  relationshipType String    @default("RELATED_TO")
+  createdByUserId  String?
+  createdAt        DateTime  @default(now())
+
+  fromItem    RoadmapItem @relation("DependencyFrom", fields: [fromItemId], references: [id], onDelete: Cascade)
+  toItem      RoadmapItem @relation("DependencyTo",   fields: [toItemId],   references: [id], onDelete: Cascade)
+
+  @@unique([fromItemId, toItemId, relationshipType])
+  @@index([fromItemId])
+  @@index([toItemId])
+}
+
+// ─── Prototype Publish History ───────────────────────────────────────────────
+
+model PrototypePublish {
+  id                    String    @id @default(cuid())
+  roadmapItemId         String
+  roadmapItem           RoadmapItem @relation(fields: [roadmapItemId], references: [id], onDelete: Cascade)
+
+  // Version tracking
+  publishVersion        Int
+  sourcePrdVersionId    String?
+  sourcePrdVersionNum   Int       @default(0)
+
+  // Prompt provenance
+  lovablePromptSnapshot String    @default("")
+  lovablePromptVersion  Int       @default(1)
+  extractionModel       String?
+  extractionProvider    String?
+
+  // Project linkage (filled in after PM creates project in Lovable)
+  lovableProjectUrl     String?
+  lovableProjectId      String?
+  githubRepoUrl         String?
+  githubBranch          String?
+  githubCommitRef       String?
+
+  // Status
+  status                String    @default("PROMPT_GENERATED")
+  // PROMPT_GENERATED | PUBLISHED | PROTOTYPE_LINKED | GITHUB_LINKED | HANDED_OFF | SUPERSEDED
+
+  // Stale detection
+  prototypeOutdated     Boolean   @default(false)
+
+  // Audit
+  publishedByUserId     String?
+  publishedByName       String    @default("")
+  linkedAt              DateTime?
+  handedOffAt           DateTime?
+  notes                 String?
+
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  @@index([roadmapItemId])
+  @@index([sourcePrdVersionId])
+  @@index([status])
+}
+
+// ─── Specs ───────────────────────────────────────────────────────────────────
+
+model Spec {
+  id                String    @id @default(cuid())
+  roadmapItemId     String?   @unique
+  title             String
+  contentMd         String    @default("")
+  version           Int       @default(1)
+  generationMethod  String    @default("AI_GENERATED")
+  sourcePromptId    String?
+  referenceDocIds   String    @default("[]")
+  // Lifecycle — DRAFT | SUBMITTED | IN_REVIEW | APPROVED | REJECTED | CHANGES_REQUESTED
+  lifecycleState    String    @default("DRAFT")
+  approvedByUserId  String?
+  approvedAt        DateTime?
+  approvedVersionId String?
+  reviewDueDate     DateTime?
+  reviewFeedback    String?
+  submittedByUserId String?
+  submittedAt       DateTime?
+  handoffStatus     String    @default("NOT_READY")
+  templateType      String    @default("FULL_PRD")
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  roadmapItem  RoadmapItem?  @relation(fields: [roadmapItemId], references: [id])
+  versions     SpecVersion[]
+
+  @@index([roadmapItemId])
+  @@index([lifecycleState])
+}
+
+model SpecVersion {
+  id                      String    @id @default(cuid())
+  specId                  String
+  version                 Int
+  versionName             String?
+  contentMd               String
+  changedByUserId         String?
+  changeSummary           String?
+  // Generation provenance
+  provider                String    @default("")
+  model                   String    @default("")
+  promptTemplateVersion   String?
+  promptTemplateId        String?
+  parentVersionId         String?
+  generationScope         String    @default("FULL_DOC")
+  generationMode          String    @default("FRESH_DRAFT")
+  commentsApplied         Int       @default(0)
+  contextSnapshotJson     String    @default("{}")
+  additionalInstructions  String?
+  sectionsRegeneratedJson String    @default("[]")
+  sectionOriginsJson      String    @default("{}")
+  createdAt               DateTime  @default(now())
+
+  spec       Spec        @relation(fields: [specId], references: [id], onDelete: Cascade)
+  changedBy  User?       @relation(fields: [changedByUserId], references: [id])
+  comments   PRDComment[]
+
+  @@index([specId])
+  @@index([version])
+}
+
+// ─── PRD Comments ─────────────────────────────────────────────────────────────
+
+model PRDComment {
+  id                    String    @id @default(cuid())
+  specVersionId         String
+  anchorStart           Int       @default(0)
+  anchorEnd             Int       @default(0)
+  anchorText            String    @default("")
+  sectionName           String    @default("")
+  issueType             String    @default("unclear")
+  severity              String    @default("MEDIUM")
+  body                  String
+  includeInRegeneration Boolean   @default(true)
+  status                String    @default("OPEN")
+  actionType            String?
+  createdByUserId       String?
+  createdByName         String    @default("")
+  createdAt             DateTime  @default(now())
+  updatedAt             DateTime  @updatedAt
+
+  specVersion     SpecVersion @relation(fields: [specVersionId], references: [id], onDelete: Cascade)
+  createdBy       User?       @relation(fields: [createdByUserId], references: [id])
+
+  @@index([specVersionId])
+  @@index([status])
+}
+
+// ─── Battle Cards ─────────────────────────────────────────────────────────────
+
+model BattleCard {
+  id                           String   @id @default(cuid())
+  organizationId               String
+  productId                    String?
+  title                        String
+  ourFeatureId                 String?
+  competitorIdsJson            String   @default("[]")
+  competitorNamesJson          String   @default("[]")
+  strengthsText                String   @default("")
+  weaknessesText               String   @default("")
+  differentiatorsText          String   @default("")
+  improvementOpportunitiesText String   @default("")
+  pmTakeawaysText              String   @default("")
+  salesMessagingText           String   @default("")
+  citationsJson                String   @default("[]")
+  contentMd                    String   @default("")
+  autoGenerated                Boolean  @default(false)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ourFeature    OurFeature?  @relation("BattleCardOurFeature", fields: [ourFeatureId], references: [id])
+  competitors   Competitor[] @relation("BattleCardCompetitor")
+
+  @@index([organizationId])
+}
+
+// ─── Accounts ─────────────────────────────────────────────────────────────────
+
+model Account {
+  id             String   @id @default(cuid())
+  organizationId String
+  productId      String?
+  name           String
+  healthStatus   String   @default("NEW")
+  csmName        String   @default("")
+  csmEmail       String?
+  meetingCadence String   @default("MONTHLY")
+  notesText      String   @default("")
+  risksText      String   @default("")
+  openAsksText   String   @default("")
+  chatSpaceId    String?
+  lastSyncAt     DateTime?
+  lastMeetingAt  DateTime?
+  nextMeetingAt  DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  updates       AccountUpdate[]
+
+  @@index([organizationId])
+  @@index([healthStatus])
+}
+
+model AccountUpdate {
+  id                    String   @id @default(cuid())
+  accountId             String
+  date                  DateTime @default(now())
+  summaryText           String   @default("")
+  issuesJson            String   @default("[]")
+  featureRequestsJson   String   @default("[]")
+  sentiment             String   @default("NEUTRAL")
+  feedbackText          String   @default("")
+  urgencyLevel          String   @default("LOW")
+  recurringConcernsJson String   @default("[]")
+  sourceType            String   @default("MANUAL")
+  roadmapItemId         String?
+  createdAt             DateTime @default(now())
+
+  account  Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+
+  @@index([accountId])
+}
+
+// ─── Competitor Key Updates ───────────────────────────────────────────────────
+
+model CompetitorKeyUpdate {
+  id                        String   @id @default(cuid())
+  competitorId              String
+  updateType                String   @default("NEW_FEATURE")
+  title                     String
+  description               String   @default("")
+  sourceUrl                 String   @default("")
+  detectedAt                DateTime @default(now())
+  previousSnapshotReference String?
+  diffSummaryText           String   @default("")
+  pmActionStatus            String   @default("NONE")
+  significance              String   @default("MEDIUM") // HIGH | MEDIUM_HIGH | MEDIUM | LOW
+  evidenceSnippet           String?
+  changeType                String?  // FEATURE_LAUNCHED | FEATURE_REMOVED | PRICING_CHANGED | INTEGRATION_ADDED | AI_MESSAGING_CHANGED | COMPLIANCE_CHANGED | RELEASE_PUBLISHED | DOCS_UPDATED | EXEC_SIGNAL
+  createdAt                 DateTime @default(now())
+
+  competitor  Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@index([competitorId])
+  @@index([detectedAt])
+}
+
+// ─── Prompts ──────────────────────────────────────────────────────────────────
+
+model Prompt {
+  id             String   @id @default(cuid())
+  organizationId String
+  category       String
+  name           String
+  description    String   @default("")
+  templateText   String
+  variablesJson  String   @default("[]")
+  isDefault      Boolean  @default(false)
+  isActive       Boolean  @default(true)
+  version        Int      @default(1)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  promptExecutionLogs PromptExecutionLog[]
+
+  @@index([organizationId])
+  @@index([category])
+}
+
+// ─── Uploaded Files ───────────────────────────────────────────────────────────
+
+model UploadedFile {
+  id             String   @id @default(cuid())
+  organizationId String
+  filename       String
+  originalName   String
+  fileType       String
+  fileSizeBytes  Int      @default(0)
+  storagePath    String
+  parsedText     String?
+  parsedJson     String?
+  uploadPurpose  String   @default("GENERAL")
+  mimeType       String   @default("")
+  createdAt      DateTime @default(now())
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([uploadPurpose])
+}
+
+// ─── Workflows ────────────────────────────────────────────────────────────────
+
+model WorkflowRun {
+  id                String   @id @default(cuid())
+  organizationId    String
+  workflowType      String
+  status            String   @default("QUEUED")
+  inputParamsJson   String   @default("{}")
+  outputSummaryJson String   @default("{}")
+  llmProvider       String   @default("")
+  model             String   @default("")
+  totalTokens       Int      @default(0)
+  estimatedCost     Float    @default(0)
+  startedAt         DateTime @default(now())
+  completedAt       DateTime?
+  errorMessage      String?
+  cancelRequested   Boolean  @default(false)
+  createdAt         DateTime @default(now())
+
+  organization  Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  steps         WorkflowStepRun[]
+
+  @@index([organizationId])
+  @@index([status])
+  @@index([workflowType])
+}
+
+model WorkflowStepRun {
+  id            String   @id @default(cuid())
+  workflowRunId String
+  stepName      String
+  stepIndex     Int      @default(0)
+  status        String   @default("QUEUED")
+  inputJson     String   @default("{}")
+  outputJson    String   @default("{}")
+  tokensUsed    Int      @default(0)
+  errorMessage  String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime @default(now())
+
+  workflowRun   WorkflowRun @relation(fields: [workflowRunId], references: [id], onDelete: Cascade)
+
+  @@index([workflowRunId])
+}
+
+// ─── LLM Configuration ───────────────────────────────────────────────────────
+
+model LLMConfig {
+  id               String   @id @default(cuid())
+  organizationId   String
+  provider         String
+  label            String
+  apiKeyEncrypted  String
+  iv               String
+  baseUrl          String?
+  defaultModel     String
+  isActive         Boolean  @default(false)
+  role             String   @default("DEFAULT") // DEFAULT | PLANNER | EXTRACTION | SYNTHESIS | CRITIQUE | SUMMARY
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+}
+
+// ─── Scheduled Jobs ───────────────────────────────────────────────────────────
+
+model ScheduledRefreshJob {
+  id             String    @id @default(cuid())
+  organizationId String
+  competitorId   String?
+  jobType        String    @default("competitor_refresh")
+  cronExpression String    @default("0 6 */15 * *")
+  isEnabled      Boolean   @default(true)
+  lastRunAt      DateTime?
+  nextRunAt      DateTime?
+  lastRunStatus  String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  competitor    Competitor?  @relation(fields: [competitorId], references: [id])
+
+  @@index([organizationId])
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+model Notification {
+  id             String   @id @default(cuid())
+  organizationId String
+  userId         String?
+  type           String   @default("GENERAL")
+  title          String
+  message        String
+  read           Boolean  @default(false)
+  entityType     String?
+  entityId       String?
+  actionUrl      String?
+  createdAt      DateTime @default(now())
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user          User?        @relation(fields: [userId], references: [id])
+
+  @@index([organizationId])
+  @@index([userId])
+  @@index([read])
+}
+
+// ─── Prompt Execution Logs ───────────────────────────────────────────────────
+
+model PromptExecutionLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  promptId       String?
+  workflowRunId  String?
+  provider       String
+  model          String
+  inputTokens    Int      @default(0)
+  outputTokens   Int      @default(0)
+  totalTokens    Int      @default(0)
+  estimatedCost  Float    @default(0)
+  durationMs     Int      @default(0)
+  success        Boolean  @default(true)
+  errorMessage   String?
+  createdAt      DateTime @default(now())
+
+  organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  prompt        Prompt?      @relation(fields: [promptId], references: [id])
+
+  @@index([organizationId])
+  @@index([createdAt])
+}
+
+// ─── Competitor Intelligence ──────────────────────────────────────────────────
+
+model CompetitorSource {
+  id                   String    @id @default(cuid())
+  competitorId         String
+  url                  String
+  domain               String?
+  sourceType           String    @default("WEBSITE") // WEBSITE | DOCS | PRICING | RELEASE_NOTES | BLOG | TRUST | INTEGRATIONS | GITHUB | REDDIT | YOUTUBE | PRODUCT_HUNT | NEWS | CUSTOM
+  label                String?
+  status               String    @default("ACTIVE") // ACTIVE | PAUSED | FAILED | BLOCKED | NEEDS_REVIEW
+  priority             String    @default("NORMAL") // HIGH | NORMAL | LOW
+  crawlFrequency       String    @default("WEEKLY") // MANUAL | DAILY | WEEKLY | BIWEEKLY | MONTHLY
+  includePaths         String?   // JSON array of glob patterns
+  excludePaths         String?   // JSON array of glob patterns
+  crawlDepth           Int       @default(2)
+  contentTypes         String?   // JSON array: html | pdf | markdown
+  recrawlStrategy      String    @default("ALL") // ALL | CHANGED_ONLY | RECENT_FIRST
+  changeDetectionTypes String?   // JSON array of focus areas
+  lastCrawledAt        DateTime?
+  lastSuccessAt        DateTime?
+  lastChangeAt         DateTime?
+  freshnessScore       Float?
+  evidenceScore        Float?
+  crawlHealthStatus    String?
+  isActive             Boolean   @default(true)
+  isAutoDiscovered     Boolean   @default(false)
+  notes                String?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+
+  competitor  Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+
+  @@index([competitorId])
+  @@index([status])
+}
+
+model CompetitorReport {
+  id               String    @id @default(cuid())
+  competitorId     String
+  organizationId   String
+  title            String
+  status           String    @default("NOT_GENERATED") // NOT_GENERATED | IN_PROGRESS | READY | STALE | FAILED
+  contentMd        String?
+  executiveSummary String?
+  confidenceOverall Float?
+  evidenceCount    Int       @default(0)
+  sourceCount      Int       @default(0)
+  generatedAt      DateTime?
+  modelUsed        String?
+  promptTokens     Int       @default(0)
+  outputTokens     Int       @default(0)
+  errorMessage     String?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  competitor    Competitor                @relation(fields: [competitorId], references: [id], onDelete: Cascade)
+  organization  Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  versions      CompetitorReportVersion[]
+
+  @@index([competitorId])
+  @@index([organizationId])
+  @@index([status])
+}
+
+model CompetitorReportVersion {
+  id        String   @id @default(cuid())
+  reportId  String
+  version   Int
+  contentMd String
+  createdAt DateTime @default(now())
+
+  report  CompetitorReport @relation(fields: [reportId], references: [id], onDelete: Cascade)
+
+  @@index([reportId])
+}
+
+// ─── Access Requests ────────────────────────────────────────────────────────
+
+model AccessRequest {
+  id                String    @id @default(cuid())
+  organizationId    String?
+  name              String
+  email             String
+  requestedRole     String    @default("VIEWER")
+  requestedProductsJson String @default("[]") // JSON array of product IDs
+  reason            String    @default("")
+  status            String    @default("PENDING") // PENDING | APPROVED | REJECTED
+  reviewedByUserId  String?
+  reviewedAt        DateTime?
+  reviewNote        String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  organization Organization? @relation(fields: [organizationId], references: [id])
+  reviewedBy   User?         @relation("ReviewedBy", fields: [reviewedByUserId], references: [id])
+
+  @@index([status])
+  @@index([email])
+  @@index([organizationId])
+}
+
+// ─── User-Product Access (many-to-many) ─────────────────────────────────────
+
+model UserProductAccess {
+  id        String   @id @default(cuid())
+  userId    String
+  productId String
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, productId])
+  @@index([userId])
+  @@index([productId])
+}

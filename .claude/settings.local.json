@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node -e \"const {PrismaClient} = require\\(''@prisma/client''\\); const p = new PrismaClient\\(\\); p.$queryRawUnsafe\\(\"\"SELECT sql FROM sqlite_master WHERE name=''WorkflowRun''\"\"\\).then\\(r => console.log\\(JSON.stringify\\(r\\)\\)\\).finally\\(\\(\\) => p.$disconnect\\(\\)\\)\")",
+      "Bash(node -e \":*)",
+      "Bash(grep -r \"NEXTAUTH_SECRET\\\\|NEXTAUTH_URL\" c:/productos/.env*)",
+      "Bash(npx tsc --noEmit --skipLibCheck)",
+      "Bash(npm run:*)",
+      "Bash(ls -la /c/productos/app/\\\\\\(auth\\\\\\)/)",
+      "Bash(find /c/productos -path */node_modules -prune -o -type f -name *permission* -print -o -name *role* -print)"
+    ]
+  }
+}
