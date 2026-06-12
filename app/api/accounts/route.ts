@@ -33,7 +33,7 @@ export async function POST(req: Request) {
     const orgId = await getOrgId()
     const raw = await req.json()
     const body = schema.parse(raw)
-    const productId = raw.productId as string | undefined
+    const productId = raw.productId || getProductIdFromRequest(req)
     const account = await prisma.account.create({ data: { ...body, organizationId: orgId, ...(productId ? { productId } : {}) } })
     return NextResponse.json(account, { status: 201 })
   } catch (e) {

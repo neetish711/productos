@@ -20,7 +20,9 @@ export async function GET(req: Request) {
 export async function POST(req: Request) {
   try {
     const orgId = await getOrgId()
-    const { ourFeatureId, competitorIds, generate, productId } = await req.json()
+    const body = await req.json()
+    const { ourFeatureId, competitorIds, generate } = body
+    const productId = body.productId || getProductIdFromRequest(req)
 
     if (!generate) {
       // Manual creation

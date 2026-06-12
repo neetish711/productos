@@ -123,7 +123,8 @@ export async function POST(req: Request) {
     const orgId = await getOrgId()
     const raw = await req.json()
     const body = createSchema.parse(raw)
-    const productId = raw.productId as string | undefined
+    // Use productId from body, or fall back to selected product cookie
+    const productId = raw.productId || getProductIdFromRequest(req)
     const competitor = await prisma.competitor.create({ data: { ...body, organizationId: orgId, ...(productId ? { productId } : {}) } })
     return NextResponse.json(competitor, { status: 201 })
   } catch (e) {
