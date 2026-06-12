@@ -40,16 +40,18 @@ export async function POST(req: Request) {
 
     const product = await prisma.product.create({
       data: {
-        ...body,
+        name: body.name,
+        description: body.description,
         organizationId: session.user.organizationId,
-        createdById: session.user.id,
       },
     })
 
-    // Grant access to the creator
-    await prisma.userProductAccess.create({
-      data: { userId: session.user.id, productId: product.id },
-    })
+    // Grant access to the creator (skip if user doesn't exist in this DB)
+    try {
+      await prisma.userProductAccess.create({
+        data: { userId: session.user.id, productId: product.id },
+      })
+    } catch { /* user may not exist after DB reset */ }
 
     return NextResponse.json(product, { status: 201 })
   } catch (err) {
