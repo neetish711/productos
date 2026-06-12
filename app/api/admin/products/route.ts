@@ -35,7 +35,7 @@ export async function POST(req: Request) {
 
     const body = z.object({
       name: z.string().min(1),
-      description: z.string().default(''),
+      description: z.string().nullish().transform((v) => v ?? ''),
     }).parse(await req.json())
 
     const product = await prisma.product.create({
