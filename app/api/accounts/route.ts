@@ -9,7 +9,7 @@ export async function GET(req: Request) {
     const orgId = await getOrgId()
     const productId = getProductIdFromRequest(req)
     const accounts = await prisma.account.findMany({
-      where: { organizationId: orgId, ...(productId ? { productId } : {}) },
+      where: { organizationId: orgId, ...(productId ? { OR: [{ productId }, { productId: null }] } : {}) },
       include: { _count: { select: { updates: true } } },
       orderBy: { name: 'asc' },
     })

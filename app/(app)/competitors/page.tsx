@@ -84,7 +84,7 @@ export default async function CompetitorsPage() {
   if (!productId) redirect('/products')
 
   const raw = await prisma.competitor.findMany({
-    where: { organizationId: orgId, productId },
+    where: { organizationId: orgId, OR: [{ productId }, { productId: null }] },
     include: {
       _count: { select: { features: true, keyUpdates: true, managedSources: true } },
       features: {

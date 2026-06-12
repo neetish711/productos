@@ -11,7 +11,7 @@ export default async function AccountsPage() {
   if (!productId) redirect('/products')
 
   const accounts = await prisma.account.findMany({
-    where: { organizationId: orgId, productId },
+    where: { organizationId: orgId, OR: [{ productId }, { productId: null }] },
     include: { _count: { select: { updates: true } } },
     orderBy: { name: 'asc' },
   })

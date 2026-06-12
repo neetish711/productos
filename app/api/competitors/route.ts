@@ -69,7 +69,7 @@ export async function GET(req: Request) {
     const orgId = await getOrgId()
     const productId = getProductIdFromRequest(req)
     const raw = await prisma.competitor.findMany({
-      where: { organizationId: orgId, ...(productId ? { productId } : {}) },
+      where: { organizationId: orgId, ...(productId ? { OR: [{ productId }, { productId: null }] } : {}) },
       include: {
         _count: { select: { features: true, keyUpdates: true, managedSources: true } },
         features: {
