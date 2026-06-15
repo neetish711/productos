@@ -6,7 +6,7 @@
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
 
-const SUPER_ADMIN_EMAIL = 'Nitish@redproduct.com'
+const SUPER_ADMIN_EMAIL = 'nitish@redproduct.com'
 const SUPER_ADMIN_PASSWORD = 'Qwerty@54321'
 const SUPER_ADMIN_NAME = 'Nitish (Super Admin)'
 const ORG_NAME = 'RedProduct'

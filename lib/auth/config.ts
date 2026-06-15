@@ -37,10 +37,19 @@ export const authOptions: NextAuthOptions = {
       async authorize(credentials) {
         if (!credentials?.email || !credentials?.password) return null
 
-        const user = await prisma.user.findUnique({
-          where: { email: credentials.email },
+        // Case-insensitive email lookup (SQLite doesn't support mode:'insensitive')
+        const emailLower = credentials.email.toLowerCase()
+        const allUsers = await prisma.user.findMany({
+          where: { email: { in: [credentials.email, emailLower, credentials.email.toUpperCase()] } },
           include: { organization: true },
         })
+        // Fallback: raw query for true case-insensitive match
+        const user = allUsers[0] ?? (await prisma.$queryRawUnsafe<any[]>(
+          `SELECT * FROM User WHERE LOWER(email) = LOWER(?) LIMIT 1`, credentials.email
+        ).then(async (rows) => {
+          if (rows.length === 0) return null
+          return prisma.user.findUnique({ where: { id: rows[0].id }, include: { organization: true } })
+        }))
         if (!user) return null
 
         const valid = await bcrypt.compare(credentials.password, user.passwordHash)
