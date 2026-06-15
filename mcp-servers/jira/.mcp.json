@@ -1,0 +1,18 @@
+{
+  "mcpServers": {
+    "jira-local": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "c:/productos/mcp-servers/jira/index.js",
+        "-e",
+        "JIRA_HOST=https://YOUR_ORG.atlassian.net",
+        "-e",
+        "JIRA_EMAIL=your-email@company.com",
+        "-e",
+        "JIRA_API_TOKEN=your-api-token"
+      ],
+      "env": {}
+    }
+  }
+}
