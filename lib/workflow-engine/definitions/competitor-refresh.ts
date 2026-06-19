@@ -1,4 +1,5 @@
 import { prisma } from '@/lib/db'
+import { crawlUrl, isCrawl4AIAvailable, truncateForLLM } from '@/lib/crawler/crawl4ai'
 import type { WorkflowDefinition, WorkflowStepDefinition } from '@/types/workflow'
 
 const crawlCompetitors: WorkflowStepDefinition = {
@@ -19,16 +20,28 @@ const crawlCompetitors: WorkflowStepDefinition = {
     for (const competitor of competitors) {
       if (!competitor.website) continue
 
-      // Use AI to synthesize new feature data (in production, crawl + diff)
+      // Try to crawl the competitor's website for real content
+      let pageContent = ''
+      const crawlerAvailable = await isCrawl4AIAvailable()
+      if (crawlerAvailable) {
+        const crawled = await crawlUrl({ url: competitor.website.startsWith('http') ? competitor.website : `https://${competitor.website}`, timeout: 25000 })
+        if (crawled.success && crawled.markdown) {
+          pageContent = truncateForLLM(crawled.markdown, 6000)
+        }
+      }
+
+      const prompt = pageContent
+        ? `You are a competitive intelligence agent. Analyze the following crawled content from ${competitor.name} (${competitor.website}):
+
+CRAWLED CONTENT:
+${pageContent}
+
+Identify their top 3 most recent product features or updates. Format each as JSON with fields: name, description, category. Return a JSON array.`
+        : `You are a competitive intelligence agent. Analyze ${competitor.name} (${competitor.website}) and identify their top 3 most recent product features or updates. Format each as JSON with fields: name, description, category. Return a JSON array.`
+
       const result = await aiClient.complete({
-        messages: [
-          {
-            role: 'user',
-            content: `You are a competitive intelligence agent. Analyze ${competitor.name} (${competitor.website}) and identify their top 3 most recent product features or updates. Format each as JSON with fields: name, description, category. Return a JSON array.`,
-          },
-        ],
-        model: 'claude-sonnet-4-6',
-      })
+        messages: [{ role: 'user', content: prompt }],
+      } as any)
       tokensUsed += (result as any).usage?.totalTokens || 0
 
       try {

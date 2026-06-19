@@ -1,5 +1,6 @@
 import { prisma } from '@/lib/db'
 import { generateCompetitorReport } from '@/lib/competitor-intelligence/report-generator'
+import { crawlUrl, isCrawl4AIAvailable, truncateForLLM } from '@/lib/crawler/crawl4ai'
 import type { WorkflowDefinition, WorkflowStepDefinition } from '@/types/workflow'
 
 // ─── Step 1: Source Audit ─────────────────────────────────────────────────────
@@ -56,22 +57,48 @@ const evidenceCollection: WorkflowStepDefinition = {
     let tokensUsed = 0
     const sourcesProcessed: string[] = []
 
+    const crawlerAvailable = await isCrawl4AIAvailable()
+
     for (const source of competitor.managedSources.slice(0, 5)) {
+      let pageContent = ''
+
+      // Try real crawl if Crawl4AI is available
+      if (crawlerAvailable) {
+        const crawled = await crawlUrl({ url: source.url, timeout: 25000 })
+        if (crawled.success && crawled.markdown) {
+          pageContent = truncateForLLM(crawled.markdown, 6000)
+        }
+      }
+
+      // Build prompt — with real content if crawled, or ask LLM to use its knowledge
+      const prompt = pageContent
+        ? `You are a competitive intelligence extraction agent. Analyze the following crawled content from ${source.url} for competitor "${competitor.name}".
+
+CRAWLED CONTENT:
+${pageContent}
+
+Extract 2-5 competitive signals from this content. Return as JSON array: [{"signal": "...", "confidence": 0.9, "category": "AI Core|Automation|Integrations|Analytics|Security|Pricing|Other"}]. Return only JSON array.`
+        : `You are a competitive intelligence extraction agent. Analyze the source at ${source.url} for ${competitor.name}. Based on what you know about this URL, extract 2-3 competitive signals as JSON array: [{"signal": "...", "confidence": 0.8, "category": "..."}]. Return only JSON array.`
+
       const result = await aiClient.complete({
-        messages: [{
-          role: 'user',
-          content: `You are a competitive intelligence extraction agent. Analyze the source at ${source.url} for ${competitor.name}. Based on what you know about this URL, extract 2-3 competitive signals as JSON array: [{"signal": "...", "confidence": 0.8, "category": "..."}]. Return only JSON array.`,
-        }],
-        maxTokens: 400,
+        messages: [{ role: 'user', content: prompt }],
+        maxTokens: 600,
         temperature: 0.2,
       } as any)
       tokensUsed += result.totalTokens ?? 0
       sourcesProcessed.push(source.url)
 
-      // Update source as crawled
+      // Update source with crawl status
+      const now = new Date()
       await prisma.competitorSource.update({
         where: { id: source.id },
-        data: { lastCrawledAt: new Date(), lastSuccessAt: new Date(), status: 'ACTIVE' },
+        data: {
+          lastCrawledAt: now,
+          lastSuccessAt: now,
+          status: 'ACTIVE',
+          freshnessScore: pageContent ? 1.0 : 0.5,
+          crawlHealthStatus: pageContent ? 'OK' : 'SIMULATED',
+        },
       })
     }
 
