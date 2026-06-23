@@ -17,6 +17,7 @@ import {
 import { toast } from 'sonner'
 import { timeAgo, cn } from '@/lib/utils'
 import { CrawlSetupModal } from '@/components/competitor/CrawlSetupModal'
+import { SourceDiscoveryWizard } from '@/components/competitor/SourceDiscoveryWizard'
 import { TagEditor } from '@/components/competitor/TagEditor'
 import { SourceManagementSheet } from '@/components/competitor/SourceManagementSheet'
 
@@ -106,6 +107,7 @@ export function CompetitorsClient({ initialCompetitors }: { initialCompetitors: 
   const [selected, setSelected] = React.useState<Set<string>>(new Set())
   const [multiSelect, setMultiSelect] = React.useState(false)
   const [addOpen, setAddOpen] = React.useState(false)
+  const [discoveryTarget, setDiscoveryTarget] = React.useState<{ id: string; name: string } | null>(null)
   const [saving, setSaving] = React.useState(false)
   const [form, setForm] = React.useState({ name: '', website: '', description: '' })
   const [customTagsMap, setCustomTagsMap] = React.useState<Record<string, string[]>>({})
@@ -185,10 +187,13 @@ export function CompetitorsClient({ initialCompetitors }: { initialCompetitors: 
         body: JSON.stringify({ ...form, monitoringEnabled: true }),
       })
       if (!res.ok) throw new Error()
-      toast.success('Competitor added')
+      const created = await res.json()
+      toast.success('Competitor added — discovering sources...')
       setAddOpen(false)
       setForm({ name: '', website: '', description: '' })
       load()
+      // Open source discovery wizard for the new competitor
+      setDiscoveryTarget({ id: created.id, name: form.name })
     } catch { toast.error('Failed to add') }
     finally { setSaving(false) }
   }
@@ -547,6 +552,17 @@ export function CompetitorsClient({ initialCompetitors }: { initialCompetitors: 
           competitorName={sourceTarget.name}
           open={!!sourceTarget}
           onOpenChange={(v) => { if (!v) setSourceTarget(null) }}
+        />
+      )}
+
+      {/* ── Source Discovery Wizard ── */}
+      {discoveryTarget && (
+        <SourceDiscoveryWizard
+          open={!!discoveryTarget}
+          onOpenChange={(v) => { if (!v) setDiscoveryTarget(null) }}
+          competitorId={discoveryTarget.id}
+          competitorName={discoveryTarget.name}
+          onComplete={load}
         />
       )}
 

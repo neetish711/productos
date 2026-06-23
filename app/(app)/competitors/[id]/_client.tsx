@@ -3,6 +3,7 @@
 import * as React from 'react'
 import { useRouter } from 'next/navigation'
 import { WorkflowCanvas as WorkflowCanvasComponent } from '@/components/competitor/WorkflowCanvas'
+import { SourceDiscoveryWizard } from '@/components/competitor/SourceDiscoveryWizard'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -219,6 +220,7 @@ export function CompetitorDetailClient({ competitor }: { competitor: Competitor 
   const [settingsFrequency, setSettingsFrequency] = React.useState(String(competitor.refreshFrequencyDays ?? 15))
   const [settingsLlm, setSettingsLlm] = React.useState('claude-sonnet-4-6')
   const [settingsTabVisited, setSettingsTabVisited] = React.useState(false)
+  const [showDiscovery, setShowDiscovery] = React.useState(false)
   const [settingsSaving, setSettingsSaving] = React.useState(false)
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false)
 
@@ -744,9 +746,23 @@ export function CompetitorDetailClient({ competitor }: { competitor: Competitor 
 
             {/* ── Sources Tab ── */}
             <TabsContent value="sources" className="p-6 mt-0">
+              <div className="mb-4 flex items-center justify-between">
+                <div />
+                <Button size="sm" variant="outline" className="gap-1.5" onClick={() => setShowDiscovery(true)}>
+                  <Sparkles className="h-3.5 w-3.5" />
+                  Auto-Populate Sources
+                </Button>
+              </div>
               <CompetitorSourceManager
                 competitorId={competitor.id}
                 initialSources={competitor.managedSources ?? []}
+              />
+              <SourceDiscoveryWizard
+                open={showDiscovery}
+                onOpenChange={setShowDiscovery}
+                competitorId={competitor.id}
+                competitorName={competitor.name}
+                onComplete={() => window.location.reload()}
               />
             </TabsContent>
 
