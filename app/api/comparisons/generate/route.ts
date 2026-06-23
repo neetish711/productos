@@ -66,10 +66,18 @@ Be specific, factual, and concise. Return valid JSON only.`
         { role: 'user', content: prompt },
       ],
       jsonMode: true,
+      maxTokens: 2000,
     })
 
     let parsed: any = {}
     try { parsed = JSON.parse(result.content) } catch {}
+
+    const VALID_POSITIONINGS = ['AHEAD', 'BEHIND', 'PARTIAL', 'EQUIVALENT', 'NO_MATCH']
+    if (!VALID_POSITIONINGS.includes(parsed.positioning)) parsed.positioning = 'NO_MATCH'
+    if (typeof parsed.similaritiesText !== 'string' || !parsed.similaritiesText.trim()) parsed.similaritiesText = 'No similarities data available.'
+    if (typeof parsed.differencesText !== 'string' || !parsed.differencesText.trim()) parsed.differencesText = 'No differences data available.'
+    if (typeof parsed.enhancementOpportunitiesText !== 'string' || !parsed.enhancementOpportunitiesText.trim()) parsed.enhancementOpportunitiesText = 'No enhancement opportunities identified.'
+    if (typeof parsed.keyTakeawaysText !== 'string' || !parsed.keyTakeawaysText.trim()) parsed.keyTakeawaysText = 'No key takeaways available.'
 
     const comparison = await prisma.comparison.upsert({
       where: {

@@ -54,39 +54,58 @@ export async function POST(_: Request, { params }: { params: { id: string } }) {
     // Try LLM-based discovery first
     let suggestions: SourceSuggestion[] = []
 
-    try {
-      const ai = await getAIClient(orgId)
-      if (ai) {
-        const prompt = `You are a competitive intelligence analyst. Given the company "${competitor.name}" with domain "${domain}", suggest 8-10 specific source URLs to monitor for competitive intelligence.
+    const MAX_LLM_ATTEMPTS = 2
+    for (let attempt = 0; attempt < MAX_LLM_ATTEMPTS && suggestions.length === 0; attempt++) {
+      try {
+        const ai = await getAIClient(orgId)
+        if (ai) {
+          const prompt = `You are a competitive intelligence analyst. Given the company "${competitor.name}" with domain "${domain}", suggest 8-10 specific source URLs to monitor for competitive intelligence.
 
-For each source, provide:
-- url: exact URL to monitor
-- sourceType: one of WEBSITE | DOCS | PRICING | RELEASE_NOTES | BLOG | TRUST | INTEGRATIONS | GITHUB | REDDIT | YOUTUBE | PRODUCT_HUNT | NEWS | CUSTOM
-- label: short human-readable name
-- priority: HIGH | NORMAL | LOW
-- rationale: 1 sentence explaining what competitive signal this provides
+You MUST respond with a valid JSON array. Each element must be an object with exactly these fields:
+- "url": string — a full, valid URL starting with https:// (e.g. "https://${domain}/pricing")
+- "sourceType": string — one of: "WEBSITE", "DOCS", "PRICING", "RELEASE_NOTES", "BLOG", "TRUST", "INTEGRATIONS", "GITHUB", "REDDIT", "YOUTUBE", "PRODUCT_HUNT", "NEWS", "CUSTOM"
+- "label": string — short human-readable name (2-4 words)
+- "priority": string — one of: "HIGH", "NORMAL", "LOW"
+- "rationale": string — 1 sentence explaining what competitive signal this URL provides
+
+Example format:
+[{"url":"https://${domain}/pricing","sourceType":"PRICING","label":"Pricing Page","priority":"HIGH","rationale":"Tracks pricing changes and packaging updates."}]
 
 Focus on sources most likely to reveal: feature changes, pricing moves, integration partners, compliance posture, and market positioning.
 
-Respond with a JSON array only, no other text.`
+Respond with the JSON array only. No markdown, no explanation.`
 
-        const response = await ai.complete({
-          messages: [{ role: 'user', content: prompt }],
-          temperature: 0.2,
-          maxTokens: 1500,
-        } as any)
+          const response = await ai.complete({
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.2,
+            maxTokens: 1500,
+            jsonMode: true,
+          } as any)
 
-        const text = response.content?.trim() ?? ''
-        const jsonMatch = text.match(/\[[\s\S]*\]/)
-        if (jsonMatch) {
-          const parsed = JSON.parse(jsonMatch[0]) as SourceSuggestion[]
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            suggestions = parsed
+          const text = response.content?.trim() ?? ''
+          let parsedArr: unknown
+          try {
+            parsedArr = JSON.parse(text)
+          } catch {
+            const jsonMatch = text.match(/\[[\s\S]*\]/)
+            if (jsonMatch) parsedArr = JSON.parse(jsonMatch[0])
+          }
+
+          if (Array.isArray(parsedArr) && parsedArr.length > 0) {
+            // Validate URLs and filter out invalid entries
+            const urlRegex = /^https?:\/\/[^\s/$.?#].[^\s]*$/i
+            const validated = (parsedArr as SourceSuggestion[]).filter(s =>
+              s.url && urlRegex.test(s.url) && s.sourceType && s.label
+            )
+            if (validated.length > 0) {
+              suggestions = validated
+            }
           }
         }
+      } catch (llmErr) {
+        console.warn(`[managed-sources/discover] LLM attempt ${attempt + 1} failed:`, llmErr instanceof Error ? llmErr.message : llmErr)
+        // Retry or fall through to pattern-based
       }
-    } catch {
-      // Fall through to pattern-based
     }
 
     if (suggestions.length === 0) {

@@ -6,7 +6,7 @@ export interface AIMessage {
 }
 
 export interface AICompletionOptions {
-  model: string
+  model?: string
   messages: AIMessage[]
   maxTokens?: number
   temperature?: number

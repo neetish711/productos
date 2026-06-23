@@ -92,7 +92,14 @@ export async function POST(req: Request) {
     if (!product) return NextResponse.json({ error: 'Product not found' }, { status: 404 })
   }
 
-  const results = { created: 0, failed: 0, errors: [] as { index: number; name: string; error: string }[] }
+  const results = { created: 0, skipped: 0, failed: 0, errors: [] as { index: number; name: string; error: string }[], duplicates: [] as string[] }
+
+  // Pre-load existing feature names for deduplication
+  const existingFeatures = await prisma.ourFeature.findMany({
+    where: { productId: resolvedProductId },
+    select: { name: true },
+  })
+  const existingNames = new Set(existingFeatures.map(f => f.name.toLowerCase().trim()))
 
   for (let i = 0; i < records.length; i++) {
     const raw = records[i]
@@ -104,6 +111,15 @@ export async function POST(req: Request) {
     }
 
     const d = parsed.data
+
+    // Deduplication check
+    if (existingNames.has(d.name.toLowerCase().trim())) {
+      results.skipped++
+      results.duplicates.push(d.name)
+      console.log(`[features/import] Skipped duplicate feature: "${d.name}" (productId: ${resolvedProductId})`)
+      continue
+    }
+
     try {
       await (prisma.ourFeature.create as any)({
         data: {
@@ -136,6 +152,8 @@ export async function POST(req: Request) {
         },
       })
       results.created++
+      // Track newly created names to prevent duplicates within the same import batch
+      existingNames.add(d.name.toLowerCase().trim())
     } catch (e: any) {
       results.failed++
       results.errors.push({ index: i, name: d.name, error: e?.message ?? 'DB error' })

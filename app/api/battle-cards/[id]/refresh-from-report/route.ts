@@ -69,19 +69,46 @@ Output only valid JSON, no other text.`
     let extracted: Record<string, string> = {}
     try {
       const text = response.content.trim()
-      const jsonMatch = text.match(/\{[\s\S]*\}/)
-      if (jsonMatch) extracted = JSON.parse(jsonMatch[0])
-    } catch {
+      // Try direct JSON.parse first (works when jsonMode is enabled)
+      try {
+        extracted = JSON.parse(text)
+      } catch {
+        // Fallback: find the outermost JSON object in the response
+        let depth = 0
+        let start = -1
+        for (let i = 0; i < text.length; i++) {
+          if (text[i] === '{') {
+            if (depth === 0) start = i
+            depth++
+          } else if (text[i] === '}') {
+            depth--
+            if (depth === 0 && start !== -1) {
+              extracted = JSON.parse(text.slice(start, i + 1))
+              break
+            }
+          }
+        }
+      }
+    } catch (parseErr) {
+      console.warn('[battle-cards/refresh-from-report] Failed to parse AI response:', parseErr instanceof Error ? parseErr.message : parseErr)
       return NextResponse.json({ error: 'Failed to parse AI response' }, { status: 500 })
+    }
+
+    // Validate that extracted fields are non-empty strings
+    const requiredFields = ['strengthsText', 'weaknessesText', 'differentiatorsText', 'salesMessagingText'] as const
+    for (const field of requiredFields) {
+      if (typeof extracted[field] !== 'string' || extracted[field].trim() === '') {
+        console.warn(`[battle-cards/refresh-from-report] Field "${field}" is missing or empty in AI response, falling back to existing value`)
+      }
     }
 
     const updated = await prisma.battleCard.update({
       where: { id: params.id },
       data: {
-        strengthsText: extracted.strengthsText || battleCard.strengthsText,
-        weaknessesText: extracted.weaknessesText || battleCard.weaknessesText,
-        differentiatorsText: extracted.differentiatorsText || battleCard.differentiatorsText,
-        salesMessagingText: extracted.salesMessagingText || battleCard.salesMessagingText,
+        strengthsText: (typeof extracted.strengthsText === 'string' && extracted.strengthsText.trim()) ? extracted.strengthsText : battleCard.strengthsText,
+        weaknessesText: (typeof extracted.weaknessesText === 'string' && extracted.weaknessesText.trim()) ? extracted.weaknessesText : battleCard.weaknessesText,
+        differentiatorsText: (typeof extracted.differentiatorsText === 'string' && extracted.differentiatorsText.trim()) ? extracted.differentiatorsText : battleCard.differentiatorsText,
+        salesMessagingText: (typeof extracted.salesMessagingText === 'string' && extracted.salesMessagingText.trim()) ? extracted.salesMessagingText : battleCard.salesMessagingText,
       },
       include: { ourFeature: true },
     })

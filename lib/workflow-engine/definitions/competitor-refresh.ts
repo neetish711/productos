@@ -39,10 +39,16 @@ ${pageContent}
 Identify their top 3 most recent product features or updates. Format each as JSON with fields: name, description, category. Return a JSON array.`
         : `You are a competitive intelligence agent. Analyze ${competitor.name} (${competitor.website}) and identify their top 3 most recent product features or updates. Format each as JSON with fields: name, description, category. Return a JSON array.`
 
+      // Load existing features for deduplication
+      const existingFeatureNames = competitor.features.map(f => f.name)
+      const deduplicationNote = existingFeatureNames.length
+        ? `\n\nDo not suggest features that duplicate these existing ones: ${existingFeatureNames.join(', ')}`
+        : ''
+
       const result = await aiClient.complete({
-        messages: [{ role: 'user', content: prompt }],
-      } as any)
-      tokensUsed += (result as any).usage?.totalTokens || 0
+        messages: [{ role: 'user', content: prompt + deduplicationNote }],
+      })
+      tokensUsed += result.totalTokens ?? 0
 
       try {
         const features = JSON.parse(result.content.match(/\[[\s\S]*\]/)?.[0] || '[]')
@@ -148,17 +154,26 @@ const analyzeGaps: WorkflowStepDefinition = {
       return { summary: 'Insufficient data for gap analysis', tokensUsed: 0 }
     }
 
+    const ourFeatureList = ourFeatures.map(f => ({ name: f.name, status: f.status }))
+
     const result = await aiClient.complete({
       messages: [
         {
           role: 'user',
-          content: `Given our product features: ${JSON.stringify(ourFeatures.map(f => f.name))}\n\nAnd competitor features: ${JSON.stringify(competitorFeatures.slice(0, 20).map(f => ({ name: f.name, competitor: f.competitor.name })))}\n\nIdentify the top 3 feature gaps where competitors have capabilities we lack. Return JSON array with: {gap, priority, competitor, recommendation}`,
+          content: `You are a competitive gap analysis agent.
+
+OUR PRODUCT FEATURES (what we already have):
+${JSON.stringify(ourFeatureList, null, 2)}
+
+COMPETITOR FEATURES:
+${JSON.stringify(competitorFeatures.slice(0, 20).map(f => ({ name: f.name, competitor: f.competitor.name })), null, 2)}
+
+Identify the top 3 feature gaps where competitors have capabilities we lack. Only include gaps for features we do NOT already have. Return JSON array with: {gap, priority, competitor, recommendation}`,
         },
       ],
-      model: 'claude-sonnet-4-6',
     })
 
-    const tokensUsed = (result as any).usage?.totalTokens || 0
+    const tokensUsed = result.totalTokens ?? 0
 
     try {
       const gaps = JSON.parse(result.content.match(/\[[\s\S]*\]/)?.[0] || '[]')

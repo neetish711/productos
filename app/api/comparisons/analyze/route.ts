@@ -128,20 +128,52 @@ Be specific, evidence-based, and use only the features listed in context. Return
         { role: 'user', content: prompt },
       ],
       jsonMode: true,
+      maxTokens: 4000,
     })
 
     let parsed: { analyses: unknown[] } = { analyses: [] }
     try { parsed = JSON.parse(result.content) } catch {}
 
-    // Map IDs back — LLM may lose the ID so re-attach by index
+    // Build a lookup map from feature name (lowercase) to selectedItem for robust matching
+    const nameToItem = new Map<string, typeof selectedItems[number]>()
+    const idToItem = new Map<string, typeof selectedItems[number]>()
+    for (const item of selectedItems) {
+      nameToItem.set(item.name.toLowerCase(), item)
+      idToItem.set(item.id, item)
+    }
+
+    // Map IDs back — match by featureId first, then by featureName, then fall back
     const analyses = Array.isArray(parsed.analyses)
-      ? parsed.analyses.map((a: any, i: number) => ({
-          ...a,
-          featureId: a.featureId ?? selectedItems[i]?.id ?? `item-${i}`,
-        }))
+      ? parsed.analyses.map((a: any, i: number) => {
+          const matchById = a.featureId ? idToItem.get(a.featureId) : undefined
+          const matchByName = a.featureName ? nameToItem.get(a.featureName.toLowerCase()) : undefined
+          const match = matchById ?? matchByName ?? selectedItems[i]
+          return {
+            ...a,
+            featureId: match?.id ?? a.featureId ?? `item-${i}`,
+          }
+        })
       : []
 
-    return NextResponse.json({ analyses })
+    // Validate each analysis entry has required fields with defaults
+    const validatedAnalyses = analyses.map((a: any) => ({
+      featureId: a.featureId,
+      featureName: a.featureName ?? 'Unknown',
+      featureCategory: a.featureCategory ?? 'General',
+      featureDescription: a.featureDescription ?? '',
+      ownerSide: a.ownerSide ?? 'ours',
+      competitiveStanding: ['AHEAD', 'BEHIND', 'EQUIVALENT', 'PARTIAL', 'UNIQUE', 'ADJACENT', 'NO_OVERLAP', 'NEEDS_REVIEW'].includes(a.competitiveStanding)
+        ? a.competitiveStanding
+        : 'NEEDS_REVIEW',
+      overlapStrength: ['strong', 'moderate', 'weak', 'minimal', 'none'].includes(a.overlapStrength)
+        ? a.overlapStrength
+        : 'none',
+      overlappingFeatures: Array.isArray(a.overlappingFeatures) ? a.overlappingFeatures : [],
+      scenarioSummary: a.scenarioSummary ?? 'No analysis available.',
+      reasoning: a.reasoning ?? 'Insufficient data for analysis.',
+    }))
+
+    return NextResponse.json({ analyses: validatedAnalyses })
   } catch (e: any) {
     if (e instanceof z.ZodError) return NextResponse.json({ error: e.errors }, { status: 400 })
     return NextResponse.json({ error: e.message ?? 'Error' }, { status: 500 })

@@ -78,7 +78,11 @@ CRAWLED CONTENT:
 ${pageContent}
 
 Extract 2-5 competitive signals from this content. Return as JSON array: [{"signal": "...", "confidence": 0.9, "category": "AI Core|Automation|Integrations|Analytics|Security|Pricing|Other"}]. Return only JSON array.`
-        : `You are a competitive intelligence extraction agent. Analyze the source at ${source.url} for ${competitor.name}. Based on what you know about this URL, extract 2-3 competitive signals as JSON array: [{"signal": "...", "confidence": 0.8, "category": "..."}]. Return only JSON array.`
+        : `You are a competitive intelligence extraction agent. Analyze the source at ${source.url} for ${competitor.name}.
+
+Note: No crawled content available. Only extract signals you are highly confident about. Set confidence to 0.5 or lower for unverified claims.
+
+Based on what you know about this URL, extract 2-3 competitive signals as JSON array: [{"signal": "...", "confidence": 0.5, "category": "AI Core|Automation|Integrations|Analytics|Security|Pricing|Other"}]. Return only JSON array.`
 
       const result = await aiClient.complete({
         messages: [{ role: 'user', content: prompt }],
@@ -130,10 +134,19 @@ const communitySignals: WorkflowStepDefinition = {
     })
     if (!competitor) return { summary: 'Competitor not found' }
 
+    // Load product category for more relevant queries
+    const product = await prisma.product.findFirst({
+      where: { organizationId: ctx.orgId },
+      select: { name: true, description: true },
+    })
+    const categoryContext = product
+      ? `Our product "${product.name}" is in the category: ${product.description || 'B2B SaaS'}. Use this context to make search queries more relevant to our market.`
+      : ''
+
     const result = await aiClient.complete({
       messages: [{
         role: 'user',
-        content: `Suggest 3 Reddit or HN search queries a PM would use to find community discussions about ${competitor.name}. Return as JSON array of strings. Example: ["${competitor.name} alternatives", "${competitor.name} pricing review"]. Return only JSON.`,
+        content: `Suggest 3 Reddit or HN search queries a PM would use to find community discussions about ${competitor.name}. ${categoryContext} Return as JSON array of strings. Example: ["${competitor.name} alternatives", "${competitor.name} pricing review"]. Return only JSON.`,
       }],
       maxTokens: 200,
       temperature: 0.3,
@@ -168,32 +181,52 @@ const changeDetection: WorkflowStepDefinition = {
     })
     if (!competitor) throw new Error('Competitor not found')
 
+    // Load existing key updates for deduplication
+    const existingUpdates = await prisma.competitorKeyUpdate.findMany({
+      where: { competitorId },
+      orderBy: { detectedAt: 'desc' },
+      take: 20,
+    })
+    const existingTitles = existingUpdates.map(u => u.title)
+
     // Use LLM to infer what might have changed (simulated since no real crawl)
     const result = await aiClient.complete({
       messages: [{
         role: 'user',
-        content: `Based on your knowledge of ${competitor.name}, suggest 1 realistic recent product change or update that a PM would want to know about. Format as JSON: {"title": "...", "updateType": "NEW_FEATURE|ENHANCEMENT|PRICING_CHANGE", "description": "...", "significance": "HIGH|MEDIUM_HIGH|MEDIUM|LOW"}. Return only JSON object.`,
+        content: `Based on your knowledge of ${competitor.name}, suggest 1 realistic recent product change or update that a PM would want to know about. Format as JSON: {"title": "...", "updateType": "NEW_FEATURE|ENHANCEMENT|PRICING_CHANGE", "description": "...", "significance": "HIGH|MEDIUM_HIGH|MEDIUM|LOW"}. Return only JSON object.
+
+Only report changes you have strong evidence for. If you cannot identify a real recent change, return an empty object {}. Do NOT fabricate changes.
+
+Do NOT duplicate any of these already-tracked updates: ${existingTitles.join('; ')}`,
       }],
       maxTokens: 300,
       temperature: 0.4,
     } as any)
+
+    const VALID_SIGNIFICANCE = ['HIGH', 'MEDIUM_HIGH', 'MEDIUM', 'LOW'] as const
 
     let created = 0
     try {
       const match = result.content.match(/\{[\s\S]*\}/)
       if (match) {
         const change = JSON.parse(match[0])
-        await prisma.competitorKeyUpdate.create({
-          data: {
-            competitorId,
-            updateType: change.updateType ?? 'ENHANCEMENT',
-            title: change.title ?? 'Update detected',
-            description: change.description ?? '',
-            significance: change.significance ?? 'MEDIUM',
-            detectedAt: new Date(),
-          },
-        })
-        created = 1
+        // Skip empty objects (LLM had no confident change to report)
+        if (change.title) {
+          const significance = VALID_SIGNIFICANCE.includes(change.significance)
+            ? change.significance
+            : 'MEDIUM'
+          await prisma.competitorKeyUpdate.create({
+            data: {
+              competitorId,
+              updateType: change.updateType ?? 'ENHANCEMENT',
+              title: change.title,
+              description: change.description ?? '',
+              significance,
+              detectedAt: new Date(),
+            },
+          })
+          created = 1
+        }
       }
     } catch { /* ignore */ }
 
@@ -234,7 +267,7 @@ const reportGeneration: WorkflowStepDefinition = {
 const battlecardUpdate: WorkflowStepDefinition = {
   name: 'BATTLECARD_UPDATE',
   required: false,
-  async execute({ ctx }) {
+  async execute({ ctx, previousResults }) {
     const competitorId = ctx.params?.competitorId
     if (!competitorId) return { summary: 'Skipped — no competitorId' }
 
@@ -249,10 +282,29 @@ const battlecardUpdate: WorkflowStepDefinition = {
       return { summary: 'No battle card found for this competitor — skipping update.' }
     }
 
-    const report = await prisma.competitorReport.findFirst({
-      where: { competitorId, organizationId: ctx.orgId, status: 'READY' },
-      orderBy: { generatedAt: 'desc' },
-    })
+    // Check if REPORT_GENERATION produced a report via previousResults
+    const reportResult = previousResults?.['REPORT_GENERATION']
+    const reportData = reportResult?.data as Record<string, any> | undefined
+    const reportId = reportData?.reportId
+    const reportFailed = reportData?.failed
+
+    if (reportFailed) {
+      return { summary: 'Report generation failed — cannot update battle card.' }
+    }
+
+    // Use report from previousResults if available, otherwise query DB
+    let report = null
+    if (reportId) {
+      report = await prisma.competitorReport.findFirst({
+        where: { id: reportId, status: 'READY' },
+      })
+    }
+    if (!report) {
+      report = await prisma.competitorReport.findFirst({
+        where: { competitorId, organizationId: ctx.orgId, status: 'READY' },
+        orderBy: { generatedAt: 'desc' },
+      })
+    }
 
     if (!report) {
       return { summary: 'No ready report available for battle card update — skipping.' }

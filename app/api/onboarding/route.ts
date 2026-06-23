@@ -14,40 +14,53 @@ export async function POST(req: Request) {
   const { step } = body
 
   try {
-    if (step === 0 && body.orgName) {
+    if (step === 0 && typeof body.orgName === 'string' && body.orgName.trim().length > 0) {
       await prisma.organization.update({
         where: { id: orgId },
-        data: { name: body.orgName, onboardingStep: 1 },
+        data: { name: body.orgName.trim(), onboardingStep: 1 },
       })
     }
 
     if (step === 1 && body.productName) {
-      await Promise.all([
-        prisma.product.create({
+      // Idempotency: check if product already exists
+      const existingProduct = await prisma.product.findFirst({
+        where: { organizationId: orgId, name: body.productName.trim() },
+      })
+      if (!existingProduct) {
+        await prisma.product.create({
           data: {
             organizationId: orgId,
-            name: body.productName,
+            name: body.productName.trim(),
             description: body.productDesc ?? '',
           },
-        }),
-        prisma.organization.update({
-          where: { id: orgId },
-          data: { onboardingStep: 2 },
-        }),
-      ])
+        })
+      }
+      await prisma.organization.update({
+        where: { id: orgId },
+        data: { onboardingStep: 2 },
+      })
     }
 
     if (step === 2 && body.competitors?.length) {
       const validCompetitors = (body.competitors as { name: string; website: string }[])
         .filter(c => c.name?.trim())
       if (validCompetitors.length > 0) {
-        await prisma.competitor.createMany({
-          data: validCompetitors.map(c => ({
-            organizationId: orgId,
-            name: c.name.trim(),
-            website: c.website?.trim() || '',
-          })),
+        // Idempotency: check which competitors already exist
+        const existingCompetitors = await prisma.competitor.findMany({
+          where: { organizationId: orgId, name: { in: validCompetitors.map(c => c.name.trim()) } },
+          select: { name: true },
         })
+        const existingNames = new Set(existingCompetitors.map(c => c.name))
+        const newCompetitors = validCompetitors.filter(c => !existingNames.has(c.name.trim()))
+        if (newCompetitors.length > 0) {
+          await prisma.competitor.createMany({
+            data: newCompetitors.map(c => ({
+              organizationId: orgId,
+              name: c.name.trim(),
+              website: c.website?.trim() || '',
+            })),
+          })
+        }
       }
       await prisma.organization.update({ where: { id: orgId }, data: { onboardingStep: 3 } })
     } else if (step === 2) {
@@ -78,10 +91,7 @@ export async function POST(req: Request) {
         where: { id: orgId },
         data: { onboardingCompleted: true, onboardingStep: 5 },
       })
-      await prisma.user.update({
-        where: { id: userId },
-        data: {},
-      })
+      // Removed unnecessary empty update on user
     }
 
     return NextResponse.json({ ok: true })
