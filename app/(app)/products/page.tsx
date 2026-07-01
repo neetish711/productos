@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
+import { toast } from 'sonner'
 
 type Product = {
   id: string
@@ -21,18 +22,26 @@ export default function ProductSelectionPage() {
   const { data: session } = useSession()
   const [products, setProducts] = useState<Product[]>([])
   const [loading, setLoading] = useState(true)
+  // AUDIT S4-catch: distinguish "failed to load" from "genuinely empty".
+  const [loadError, setLoadError] = useState(false)
 
-  useEffect(() => {
-    fetch('/api/user/products')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) {
-          setProducts(data)
-        }
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false))
-  }, [])
+  const loadProducts = async () => {
+    setLoading(true)
+    setLoadError(false)
+    try {
+      const res = await fetch('/api/user/products')
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setProducts(Array.isArray(data) ? data : [])
+    } catch {
+      setLoadError(true)
+      toast.error('Could not load products. Please retry.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => { loadProducts() }, [])
 
   const selectProduct = async (productId: string) => {
     // Store selected product in cookie (for server components) and localStorage (for client components)
@@ -70,6 +79,15 @@ export default function ProductSelectionPage() {
               <Skeleton key={i} className="h-48 rounded-lg" />
             ))}
           </div>
+        ) : loadError ? (
+          <Card className="max-w-md mx-auto">
+            <CardContent className="pt-8 pb-8 text-center space-y-4">
+              <Package className="h-16 w-16 text-muted-foreground mx-auto" />
+              <h2 className="text-xl font-semibold">Couldn&apos;t load products</h2>
+              <p className="text-muted-foreground text-sm">Something went wrong reaching the server.</p>
+              <Button variant="outline" onClick={loadProducts}>Retry</Button>
+            </CardContent>
+          </Card>
         ) : products.length === 0 ? (
           <Card className="max-w-md mx-auto">
             <CardContent className="pt-8 pb-8 text-center space-y-4">

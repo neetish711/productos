@@ -528,6 +528,7 @@ CREATE TABLE "CompetitorKeyUpdate" (
     "evidenceSnippet" TEXT,
     "changeType" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "CompetitorKeyUpdate_pkey" PRIMARY KEY ("id")
 );
@@ -655,6 +656,7 @@ CREATE TABLE "Notification" (
     "entityId" TEXT,
     "actionUrl" TEXT,
     "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
 
     CONSTRAINT "Notification_pkey" PRIMARY KEY ("id")
 );
@@ -851,6 +853,9 @@ CREATE INDEX "FeatureFeedback_type_idx" ON "FeatureFeedback"("type");
 CREATE INDEX "Competitor_organizationId_idx" ON "Competitor"("organizationId");
 
 -- CreateIndex
+CREATE INDEX "Competitor_productId_idx" ON "Competitor"("productId");
+
+-- CreateIndex
 CREATE INDEX "CompetitorFeature_competitorId_idx" ON "CompetitorFeature"("competitorId");
 
 -- CreateIndex
@@ -947,10 +952,16 @@ CREATE INDEX "PRDComment_status_idx" ON "PRDComment"("status");
 CREATE INDEX "BattleCard_organizationId_idx" ON "BattleCard"("organizationId");
 
 -- CreateIndex
+CREATE INDEX "BattleCard_productId_idx" ON "BattleCard"("productId");
+
+-- CreateIndex
 CREATE INDEX "Account_organizationId_idx" ON "Account"("organizationId");
 
 -- CreateIndex
 CREATE INDEX "Account_healthStatus_idx" ON "Account"("healthStatus");
+
+-- CreateIndex
+CREATE INDEX "Account_productId_idx" ON "Account"("productId");
 
 -- CreateIndex
 CREATE INDEX "AccountUpdate_accountId_idx" ON "AccountUpdate"("accountId");
@@ -1079,6 +1090,9 @@ ALTER TABLE "FeatureFeedback" ADD CONSTRAINT "FeatureFeedback_featureId_fkey" FO
 ALTER TABLE "Competitor" ADD CONSTRAINT "Competitor_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "Competitor" ADD CONSTRAINT "Competitor_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "CompetitorFeature" ADD CONSTRAINT "CompetitorFeature_competitorId_fkey" FOREIGN KEY ("competitorId") REFERENCES "Competitor"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
@@ -1130,10 +1144,16 @@ ALTER TABLE "PRDComment" ADD CONSTRAINT "PRDComment_createdByUserId_fkey" FOREIG
 ALTER TABLE "BattleCard" ADD CONSTRAINT "BattleCard_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
+ALTER TABLE "BattleCard" ADD CONSTRAINT "BattleCard_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+
+-- AddForeignKey
 ALTER TABLE "BattleCard" ADD CONSTRAINT "BattleCard_ourFeatureId_fkey" FOREIGN KEY ("ourFeatureId") REFERENCES "OurFeature"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Account" ADD CONSTRAINT "Account_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
+
+-- AddForeignKey
+ALTER TABLE "Account" ADD CONSTRAINT "Account_productId_fkey" FOREIGN KEY ("productId") REFERENCES "Product"("id") ON DELETE SET NULL ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "AccountUpdate" ADD CONSTRAINT "AccountUpdate_accountId_fkey" FOREIGN KEY ("accountId") REFERENCES "Account"("id") ON DELETE CASCADE ON UPDATE CASCADE;
@@ -1160,7 +1180,7 @@ ALTER TABLE "LLMConfig" ADD CONSTRAINT "LLMConfig_organizationId_fkey" FOREIGN K
 ALTER TABLE "ScheduledRefreshJob" ADD CONSTRAINT "ScheduledRefreshJob_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
-ALTER TABLE "ScheduledRefreshJob" ADD CONSTRAINT "ScheduledRefreshJob_competitorId_fkey" FOREIGN KEY ("competitorId") REFERENCES "Competitor"("id") ON DELETE SET NULL ON UPDATE CASCADE;
+ALTER TABLE "ScheduledRefreshJob" ADD CONSTRAINT "ScheduledRefreshJob_competitorId_fkey" FOREIGN KEY ("competitorId") REFERENCES "Competitor"("id") ON DELETE CASCADE ON UPDATE CASCADE;
 
 -- AddForeignKey
 ALTER TABLE "Notification" ADD CONSTRAINT "Notification_organizationId_fkey" FOREIGN KEY ("organizationId") REFERENCES "Organization"("id") ON DELETE CASCADE ON UPDATE CASCADE;

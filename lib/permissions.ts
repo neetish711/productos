@@ -178,7 +178,11 @@ export const PERMISSION_LABELS: Record<string, { label: string; module: string; 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 export function isAdmin(role: string): boolean {
-  return role === 'SUPER_ADMIN' || role === 'ADMIN'
+  // AUDIT S4-legacy: only SUPER_ADMIN bypasses permission checks. The legacy
+  // 'ADMIN' role no longer short-circuits hasPermission() — it must rely on its
+  // explicit permission set (ROLE_DEFAULTS.ADMIN grants all), closing the
+  // escalation blast-radius if that role string is ever obtained.
+  return role === 'SUPER_ADMIN'
 }
 
 export function isSuperAdmin(role: string): boolean {

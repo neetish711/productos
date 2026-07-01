@@ -28,3 +28,15 @@ export async function PATCH(req: Request) {
     return NextResponse.json(updated)
   } catch { return NextResponse.json({ error: 'Error' }, { status: 500 }) }
 }
+
+// AUDIT S4-keyupd: allow deleting a misclassified key update (org-scoped).
+export async function DELETE(req: Request) {
+  try {
+    const orgId = await getOrgId()
+    const { id } = await req.json()
+    const update = await prisma.competitorKeyUpdate.findFirst({ where: { id, competitor: { organizationId: orgId } } })
+    if (!update) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    await prisma.competitorKeyUpdate.delete({ where: { id } })
+    return NextResponse.json({ success: true })
+  } catch { return NextResponse.json({ error: 'Error' }, { status: 500 }) }
+}

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getOrgId } from '@/lib/auth/utils'
 import * as XLSX from 'xlsx'
+import Papa from 'papaparse'
 
 const FIELD_HINTS: Record<string, string[]> = {
   title: ['title', 'feature', 'name', 'item', 'feature name', 'feature title', 'task'],
@@ -64,19 +65,19 @@ export async function POST(req: Request) {
     // -----------------------------------------------------------------------
     if (ext === 'csv') {
       const text = buffer.toString('utf-8')
-      const allLines = text.split('\n').filter(l => l.trim())
-      const parseRow = (line: string) => line.split(',').map(v => v.trim().replace(/^"|"$/g, ''))
+      // AUDIT S4-csv: proper RFC-4180 parsing (quoted fields, embedded commas)
+      // via Papa Parse instead of a naive line.split(',').
+      const parsed = Papa.parse<string[]>(text, { skipEmptyLines: true })
+      const allRows = (parsed.data as string[][]).filter(r => r.some(v => (v ?? '').trim()))
 
-      // Build raw preview rows (first 10)
-      const previewRows = allLines.slice(0, 10).map(parseRow)
-
+      const previewRows = allRows.slice(0, 10)
       const headerRowIndex = headerRowParam ? parseInt(headerRowParam, 10) : 0
-      const headers = previewRows[headerRowIndex] ?? []
+      const headers = (previewRows[headerRowIndex] ?? []).map(h => (h ?? '').trim())
       const rows: Record<string, string>[] = []
-      for (let i = headerRowIndex + 1; i < Math.min(allLines.length, headerRowIndex + 501); i++) {
-        const vals = parseRow(allLines[i])
+      for (let i = headerRowIndex + 1; i < Math.min(allRows.length, headerRowIndex + 501); i++) {
+        const vals = allRows[i] ?? []
         const row: Record<string, string> = {}
-        headers.forEach((h, j) => { row[h] = vals[j] ?? '' })
+        headers.forEach((h, j) => { row[h] = (vals[j] ?? '').trim() })
         if (Object.values(row).some(v => v)) rows.push(row)
       }
 

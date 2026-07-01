@@ -11,7 +11,7 @@ import { Label } from '@/components/ui/label'
 import { toast } from 'sonner'
 import {
   RefreshCw, Loader2, Search, TrendingUp, AlertCircle, PlusCircle,
-  CheckCircle, ChevronDown, ChevronRight, ExternalLink,
+  CheckCircle, ChevronDown, ChevronRight, ExternalLink, Trash2,
 } from 'lucide-react'
 import { timeAgo } from '@/lib/utils'
 
@@ -130,14 +130,31 @@ export function KeyUpdatesClient({ updates: initial }: Props) {
   const runRefresh = async () => {
     setRunning(true)
     try {
-      const res = await fetch('/api/cron/competitor-refresh', { method: 'POST' })
+      // AUDIT S4-keyupd: use the session-authed user endpoint, not the cron-only one.
+      const res = await fetch('/api/key-updates/refresh', { method: 'POST' })
       if (!res.ok) throw new Error()
-      toast.success('Competitor refresh started')
+      const data = await res.json().catch(() => ({}))
+      toast.success(data.alreadyRunning ? 'A refresh is already running' : 'Competitor refresh started')
       router.refresh()
     } catch {
       toast.error('Failed to start refresh')
     } finally {
       setRunning(false)
+    }
+  }
+
+  // AUDIT S4-keyupd: delete a misclassified update.
+  const deleteUpdate = async (id: string) => {
+    const res = await fetch('/api/key-updates', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+    })
+    if (res.ok) {
+      setUpdates((prev) => prev.filter((u) => u.id !== id))
+      toast.success('Update deleted')
+    } else {
+      toast.error('Failed to delete')
     }
   }
 
@@ -308,6 +325,16 @@ export function KeyUpdatesClient({ updates: initial }: Props) {
                           ))}
                         </SelectContent>
                       </Select>
+                      {/* AUDIT S4-keyupd: delete a misclassified update */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-2 text-muted-foreground hover:text-red-600"
+                        onClick={() => deleteUpdate(update.id)}
+                        title="Delete update"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
                 </div>

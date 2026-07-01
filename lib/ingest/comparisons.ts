@@ -82,14 +82,18 @@ export function extractComparisonsFromXLSX(buffer: Buffer): ExtractedComparison[
 export async function saveComparisonsToDB(
   orgId: string,
   comparisons: ExtractedComparison[]
-): Promise<{ created: number; updated: number; skipped: number }> {
+): Promise<{ created: number; updated: number; skipped: number; errors?: string[] }> {
   let created = 0
   let updated = 0
   let skipped = 0
+  // AUDIT S4-cmp: collect specific reasons instead of silently skipping rows.
+  const errors: string[] = []
 
   // Build lookup maps for existing features and competitors
   const product = await prisma.product.findFirst({ where: { organizationId: orgId } })
-  if (!product) return { created: 0, updated: 0, skipped: comparisons.length }
+  if (!product) {
+    return { created: 0, updated: 0, skipped: comparisons.length, errors: ['No product exists yet — create a product and import features/competitors before comparisons.'] }
+  }
 
   const ourFeatures = await prisma.ourFeature.findMany({ where: { productId: product.id } })
   const competitors = await prisma.competitor.findMany({ where: { organizationId: orgId } })
@@ -103,6 +107,12 @@ export async function saveComparisonsToDB(
 
     if (!ourFeature || !competitor) {
       skipped++
+      const missing: string[] = []
+      if (!ourFeature) missing.push(`feature "${comp.ourFeatureName}"`)
+      if (!competitor) missing.push(`competitor "${comp.competitorName}"`)
+      // AUDIT S4-cmp: name exactly what couldn't be matched.
+      const msg = `Skipped: could not find ${missing.join(' and ')}. Import features & competitors first.`
+      if (!errors.includes(msg)) errors.push(msg)
       continue
     }
 
@@ -135,5 +145,5 @@ export async function saveComparisonsToDB(
     }
   }
 
-  return { created, updated, skipped }
+  return { created, updated, skipped, errors: errors.slice(0, 20) }
 }

@@ -21,7 +21,8 @@ const schema = z.object({
   name: z.string().min(1),
   healthStatus: z.enum(['NEW', 'HEALTHY', 'AT_RISK', 'CRITICAL', 'CHURNED']).default('NEW'),
   csmName: z.string().default(''),
-  csmEmail: z.string().optional(),
+  // AUDIT S4-email: validate format while still allowing empty/omitted.
+  csmEmail: z.union([z.string().email('Invalid email'), z.literal('')]).optional(),
   meetingCadence: z.enum(['WEEKLY', 'BIWEEKLY', 'MONTHLY', 'QUARTERLY', 'NONE']).default('MONTHLY'),
   notesText: z.string().default(''),
   risksText: z.string().default(''),

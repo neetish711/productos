@@ -131,6 +131,10 @@ model Product {
   roadmapItems   RoadmapItem[]
   importJobs     ImportJob[]
   userAccess     UserProductAccess[]
+  // AUDIT S4-DM: back-relations for the productId FKs added on these models.
+  competitors    Competitor[]
+  accounts       Account[]
+  battleCards    BattleCard[]
 
   @@index([organizationId])
 }
@@ -252,6 +256,8 @@ model Competitor {
   updatedAt            DateTime  @updatedAt
 
   organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  // AUDIT S4-DM: real relation (was a dangling string) so a deleted product nulls the link.
+  product              Product?              @relation(fields: [productId], references: [id], onDelete: SetNull)
   features             CompetitorFeature[]
   comparisons          Comparison[]
   keyUpdates           CompetitorKeyUpdate[]
@@ -261,6 +267,7 @@ model Competitor {
   reports              CompetitorReport[]
 
   @@index([organizationId])
+  @@index([productId]) // AUDIT S4-DM: product-scoped queries are the core access pattern
 }
 
 model CompetitorFeature {
@@ -536,7 +543,7 @@ model Spec {
   createdAt         DateTime  @default(now())
   updatedAt         DateTime  @updatedAt
 
-  roadmapItem  RoadmapItem?  @relation(fields: [roadmapItemId], references: [id])
+  roadmapItem  RoadmapItem?  @relation(fields: [roadmapItemId], references: [id], onDelete: SetNull) // AUDIT S4-DM
   versions     SpecVersion[]
 
   @@index([roadmapItemId])
@@ -624,10 +631,12 @@ model BattleCard {
   updatedAt                    DateTime @updatedAt
 
   organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product       Product?     @relation(fields: [productId], references: [id], onDelete: SetNull) // AUDIT S4-DM
   ourFeature    OurFeature?  @relation("BattleCardOurFeature", fields: [ourFeatureId], references: [id])
   competitors   Competitor[] @relation("BattleCardCompetitor")
 
   @@index([organizationId])
+  @@index([productId]) // AUDIT S4-DM
 }
 
 // ─── Accounts ─────────────────────────────────────────────────────────────────
@@ -652,10 +661,12 @@ model Account {
   updatedAt      DateTime @updatedAt
 
   organization  Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product       Product?        @relation(fields: [productId], references: [id], onDelete: SetNull) // AUDIT S4-DM
   updates       AccountUpdate[]
 
   @@index([organizationId])
   @@index([healthStatus])
+  @@index([productId]) // AUDIT S4-DM
 }
 
 model AccountUpdate {
@@ -695,6 +706,7 @@ model CompetitorKeyUpdate {
   evidenceSnippet           String?
   changeType                String?  // FEATURE_LAUNCHED | FEATURE_REMOVED | PRICING_CHANGED | INTEGRATION_ADDED | AI_MESSAGING_CHANGED | COMPLIANCE_CHANGED | RELEASE_PUBLISHED | DOCS_UPDATED | EXEC_SIGNAL
   createdAt                 DateTime @default(now())
+  updatedAt                 DateTime @default(now()) @updatedAt // AUDIT S4-DM: mutable (pmActionStatus)
 
   competitor  Competitor @relation(fields: [competitorId], references: [id], onDelete: Cascade)
 
@@ -832,7 +844,7 @@ model ScheduledRefreshJob {
   updatedAt      DateTime  @updatedAt
 
   organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  competitor    Competitor?  @relation(fields: [competitorId], references: [id])
+  competitor    Competitor?  @relation(fields: [competitorId], references: [id], onDelete: Cascade) // AUDIT S4-DM
 
   @@index([organizationId])
 }
@@ -851,6 +863,7 @@ model Notification {
   entityId       String?
   actionUrl      String?
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @default(now()) @updatedAt // AUDIT S4-DM: mutable (read flag)
 
   organization  Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user          User?        @relation(fields: [userId], references: [id])

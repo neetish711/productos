@@ -348,12 +348,14 @@ export function IntegrationsClient() {
   const loadStatus = async () => {
     try {
       const res = await fetch('/api/integrations/status')
-      if (res.ok) {
-        const data = await res.json()
-        setIntegrationStatus(data)
-        // AUDIT S3-4: reflect the real persisted Google Chat state on load.
-        if (data.googleChat?.connected) setGchatEnabled(true)
-      }
+      if (!res.ok) throw new Error()
+      const data = await res.json()
+      setIntegrationStatus(data)
+      // AUDIT S3-4: reflect the real persisted Google Chat state on load.
+      if (data.googleChat?.connected) setGchatEnabled(true)
+    } catch {
+      // AUDIT S4-catch: surface load failures instead of a silently blank page.
+      toast.error('Could not load integration status. Please refresh.')
     } finally {
       setStatusLoading(false)
     }
