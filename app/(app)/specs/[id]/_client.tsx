@@ -112,15 +112,11 @@ interface SpecWorkspaceClientProps {
   userId: string
   userName: string
   userRole: string
+  // AUDIT S3-1: capability flags derived from real permissions on the server.
+  canReview: boolean
+  canSubmit: boolean
   llmConfigs: { id: string; label: string; provider: string; defaultModel: string }[]
 }
-
-// ---------------------------------------------------------------------------
-// Role-based permissions
-// Roles listed here can approve specs and request revisions.
-// All authenticated users can submit for review.
-// ---------------------------------------------------------------------------
-const REVIEWER_ROLES = ['ADMIN', 'REVIEWER', 'SENIOR_PM']
 
 type ActiveMode = 'read' | 'review' | 'edit'
 
@@ -701,11 +697,11 @@ export function SpecWorkspaceClient({
   userId: _userId,
   userName,
   userRole,
+  canReview,
+  canSubmit,
   llmConfigs,
 }: SpecWorkspaceClientProps) {
-  // Role-derived permissions
-  const canReview = REVIEWER_ROLES.includes(userRole)
-  const canSubmit = true // any authenticated user can submit for review
+  // AUDIT S3-1: canReview/canSubmit are real permission flags from the server.
   // ---- state ----
   const [activeMode, setActiveMode] = useState<ActiveMode>('read')
   const [editContent, setEditContent] = useState(spec.contentMd)
@@ -730,6 +726,10 @@ export function SpecWorkspaceClient({
 
   const [activeCommentId, setActiveCommentId] = useState<string | null>(null)
   const [lifecycleState, setLifecycleState] = useState(spec.lifecycleState)
+  // AUDIT S3-2: review feedback state + modal for reject/request-changes.
+  const [reviewFeedback, setReviewFeedback] = useState<string>((spec as any).reviewFeedback ?? '')
+  const [reviewModal, setReviewModal] = useState<{ action: 'REJECT' | 'REQUEST_REVISION' } | null>(null)
+  const [reviewFeedbackText, setReviewFeedbackText] = useState('')
 
   // Review mode: selection state
   const [selectionTooltip, setSelectionTooltip] = useState<CommentFormState | null>(null)
@@ -880,12 +880,14 @@ export function SpecWorkspaceClient({
   }
 
   // ---- lifecycle actions ----
-  const handleLifecycleAction = async (action: string) => {
+  // AUDIT S3-2: REJECT / REQUEST_REVISION carry required reviewer feedback so the
+  // author gets an explanation instead of a bare "Rejected" badge.
+  const handleLifecycleAction = async (action: string, feedback?: string) => {
     try {
       const res = await fetch(`/api/specs/${spec.id}/approve`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, ...(feedback ? { feedback } : {}) }),
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({}))
@@ -894,16 +896,31 @@ export function SpecWorkspaceClient({
       const data = await res.json()
       const newState: string = data.lifecycleState ?? data.state ?? lifecycleState
       setLifecycleState(newState)
+      if (feedback !== undefined) setReviewFeedback(feedback)
       toast.success(
         action === 'SUBMIT_REVIEW'
           ? 'Submitted for review'
           : action === 'APPROVE'
           ? 'Spec approved'
+          : action === 'REJECT'
+          ? 'Spec rejected'
           : 'Revision requested'
       )
     } catch (err: unknown) {
       toast.error(err instanceof Error ? err.message : 'Action failed')
     }
+  }
+
+  // AUDIT S3-2: modal that collects required feedback for reject / request-changes.
+  const submitReviewDecision = async () => {
+    if (!reviewModal) return
+    if (!reviewFeedbackText.trim()) {
+      toast.error('Please add feedback explaining your decision')
+      return
+    }
+    await handleLifecycleAction(reviewModal.action, reviewFeedbackText.trim())
+    setReviewModal(null)
+    setReviewFeedbackText('')
   }
 
   // ---- version selection ----
@@ -1215,7 +1232,7 @@ export function SpecWorkspaceClient({
                     size="sm"
                     variant="outline"
                     className="h-7 text-xs border-orange-300 text-orange-700 hover:bg-orange-50"
-                    onClick={() => handleLifecycleAction('REQUEST_REVISION')}
+                    onClick={() => { setReviewFeedbackText(''); setReviewModal({ action: 'REQUEST_REVISION' }) }}
                   >
                     Request Changes
                   </Button>
@@ -1223,7 +1240,7 @@ export function SpecWorkspaceClient({
                     size="sm"
                     variant="outline"
                     className="h-7 text-xs border-red-300 text-red-700 hover:bg-red-50"
-                    onClick={() => handleLifecycleAction('REJECT')}
+                    onClick={() => { setReviewFeedbackText(''); setReviewModal({ action: 'REJECT' }) }}
                   >
                     Reject
                   </Button>
@@ -1265,6 +1282,16 @@ export function SpecWorkspaceClient({
           }}
         >
           <div className="max-w-3xl mx-auto px-6 py-6">
+            {/* AUDIT S3-2: surface reviewer feedback to the author on rejected /
+                changes-requested specs, so a decision is never a bare badge. */}
+            {reviewFeedback && ['REJECTED', 'CHANGES_REQUESTED', 'NEEDS_REVISION'].includes(lifecycleState) && (
+              <div className="mb-4 rounded-md border border-orange-300 bg-orange-50 px-4 py-3">
+                <p className="text-xs font-semibold uppercase tracking-wide text-orange-800">
+                  {lifecycleState === 'REJECTED' ? 'Rejected — reviewer feedback' : 'Changes requested — reviewer feedback'}
+                </p>
+                <p className="mt-1 whitespace-pre-wrap text-sm text-orange-900">{reviewFeedback}</p>
+              </div>
+            )}
             {/* Non-current version banner */}
             {!isViewingCurrentVersion && currentVersionObj && currentVersion && (
               <NonCurrentVersionBanner
@@ -1432,6 +1459,35 @@ export function SpecWorkspaceClient({
           initialFromId={diffFromId}
           initialToId={diffToId}
         />
+      )}
+
+      {/* AUDIT S3-2: reviewer feedback modal for reject / request-changes */}
+      {reviewModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-xl">
+            <h3 className="text-sm font-semibold text-gray-900">
+              {reviewModal.action === 'REJECT' ? 'Reject spec' : 'Request changes'}
+            </h3>
+            <p className="mt-1 text-xs text-gray-500">
+              Explain what needs to change so the author can act on it. This is shared with the author.
+            </p>
+            <Textarea
+              autoFocus
+              value={reviewFeedbackText}
+              onChange={(e) => setReviewFeedbackText(e.target.value)}
+              placeholder="Your feedback…"
+              className="mt-3 min-h-[120px] text-sm"
+            />
+            <div className="mt-4 flex justify-end gap-2">
+              <Button size="sm" variant="outline" className="h-8 text-xs" onClick={() => { setReviewModal(null); setReviewFeedbackText('') }}>
+                Cancel
+              </Button>
+              <Button size="sm" className="h-8 text-xs" onClick={submitReviewDecision}>
+                {reviewModal.action === 'REJECT' ? 'Reject' : 'Request changes'}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

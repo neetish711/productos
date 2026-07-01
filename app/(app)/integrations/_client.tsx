@@ -351,6 +351,8 @@ export function IntegrationsClient() {
       if (res.ok) {
         const data = await res.json()
         setIntegrationStatus(data)
+        // AUDIT S3-4: reflect the real persisted Google Chat state on load.
+        if (data.googleChat?.connected) setGchatEnabled(true)
       }
     } finally {
       setStatusLoading(false)
@@ -406,16 +408,40 @@ export function IntegrationsClient() {
     }
   }
 
+  // AUDIT S3-4: persist via the real connect route (validates + tests + stores
+  // the webhook encrypted) instead of just flipping client state.
   const saveGChat = async () => {
+    if (!webhookUrl.trim()) { toast.error('Enter a webhook URL first'); return }
     setGchatSaving(true)
     try {
+      const res = await fetch('/api/integrations/google-chat/connect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ webhookUrl: webhookUrl.trim() }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? 'Failed to connect')
       setGchatEnabled(true)
       setShowGChatSetup(false)
-      toast.success('Google Chat integration enabled')
-    } catch {
-      toast.error('Failed to save')
+      toast.success('Google Chat connected')
+      await loadStatus()
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Failed to save')
     } finally {
       setGchatSaving(false)
+    }
+  }
+
+  const disconnectGChat = async () => {
+    try {
+      const res = await fetch('/api/integrations/google-chat/disconnect', { method: 'POST' })
+      if (!res.ok) throw new Error()
+      setGchatEnabled(false)
+      setWebhookUrl('')
+      toast.success('Google Chat disconnected')
+      await loadStatus()
+    } catch {
+      toast.error('Failed to disconnect')
     }
   }
 
@@ -501,7 +527,10 @@ export function IntegrationsClient() {
               <p className="text-sm text-muted-foreground mt-0.5">Post competitor updates and roadmap changes to Google Chat spaces</p>
             </div>
             {gchatEnabled ? (
-              <Button variant="outline" size="sm" onClick={() => setShowGChatSetup(true)}>Configure</Button>
+              <div className="flex items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => setShowGChatSetup(true)}>Configure</Button>
+                <Button variant="ghost" size="sm" onClick={disconnectGChat}>Disconnect</Button>
+              </div>
             ) : (
               <Button size="sm" onClick={() => setShowGChatSetup(true)}>Connect</Button>
             )}

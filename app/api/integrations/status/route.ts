@@ -25,11 +25,12 @@ async function getIntegrationStatus(orgId: string, type: string) {
 export async function GET() {
   try {
     const orgId = await getOrgId()
-    const [lovable, github] = await Promise.all([
+    const [lovable, github, googleChat] = await Promise.all([
       getIntegrationStatus(orgId, 'LOVABLE'),
       getIntegrationStatus(orgId, 'GITHUB'),
+      getIntegrationStatus(orgId, 'GOOGLE_CHAT'), // AUDIT S3-4
     ])
-    return NextResponse.json({ lovable, github })
+    return NextResponse.json({ lovable, github, googleChat })
   } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }

@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/db'
 import { generateCompetitorReport } from '@/lib/competitor-intelligence/report-generator'
 import { crawlUrl, isCrawl4AIAvailable, truncateForLLM } from '@/lib/crawler/crawl4ai'
+import { notifyGoogleChat } from '@/lib/integrations/google-chat'
 import type { WorkflowDefinition, WorkflowStepDefinition } from '@/types/workflow'
 
 // ─── Step 1: Source Audit ─────────────────────────────────────────────────────
@@ -266,6 +267,8 @@ Do NOT infer beyond the content. Do NOT duplicate any of these already-tracked u
             })
             existingTitles.push(change.title)
             created++
+            // AUDIT S3-4: real notification dispatch (no-op if Google Chat isn't connected).
+            void notifyGoogleChat(ctx.orgId, `🔔 New update for competitor "${competitor.name}": ${change.title}`)
           }
         }
       } catch { /* ignore malformed JSON */ }

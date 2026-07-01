@@ -32,14 +32,22 @@ export default async function DashboardPage() {
     ? { productId: selectedProductId }
     : { productId: { in: accessibleProductIds } }
 
+  // AUDIT S3-9: scope competitor/account counts to the selected product (matching
+  // features/roadmap) so switching products updates every card consistently.
+  // Org-wide (productId: null) records still count within the org.
+  const productScope = selectedProductId
+    ? { OR: [{ productId: selectedProductId }, { productId: null }] }
+    : {}
+
   const [org, selectedProduct, competitors, accounts, aiSuggestions, recentUpdates] = await Promise.all([
     prisma.organization.findUnique({ where: { id: orgId } }),
     selectedProductId ? prisma.product.findUnique({
       where: { id: selectedProductId },
       include: { _count: { select: { ourFeatures: true, roadmapItems: true } } },
     }) : null,
-    prisma.competitor.count({ where: { organizationId: orgId } }),
-    prisma.account.count({ where: { organizationId: orgId } }),
+    prisma.competitor.count({ where: { organizationId: orgId, ...productScope } }),
+    // AUDIT S3-9: "Open Accounts" now excludes churned accounts.
+    prisma.account.count({ where: { organizationId: orgId, healthStatus: { not: 'CHURNED' }, ...productScope } }),
     prisma.roadmapItem.count({
       where: { ...productFilter, isAiSuggested: true, dismissedAt: null },
     }),

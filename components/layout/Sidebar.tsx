@@ -1,8 +1,9 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import Link from 'next/link'
-import { usePathname } from 'next/navigation'
+import { usePathname, useRouter } from 'next/navigation'
 import { useSession } from 'next-auth/react'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { useUIStore } from '@/store/ui.store'
 import { useProductStore } from '@/store/product.store'
@@ -67,17 +68,16 @@ type NavItemType = {
   children?: { label: string; href: string }[]
 }
 
-export function Sidebar() {
+type ProductOption = { id: string; name: string }
+
+export function Sidebar({ products = [], selectedProductId = null }: {
+  products?: ProductOption[]
+  selectedProductId?: string | null
+}) {
   const collapsed = useUIStore((s) => s.sidebarCollapsed)
   const toggle = useUIStore((s) => s.toggleSidebar)
   const pathname = usePathname()
   const { data: session } = useSession()
-  const storeProductName = useProductStore((s) => s.selectedProductName)
-
-  // Avoid hydration mismatch: only show product name after client mount
-  const [mounted, setMounted] = useState(false)
-  useEffect(() => { setMounted(true) }, [])
-  const selectedProductName = mounted ? storeProductName : null
 
   const userRole = (session?.user as { role?: string })?.role || ''
   const isAdminUser = ['SUPER_ADMIN', 'SENIOR_PM', 'PM', 'ADMIN'].includes(userRole)
@@ -96,30 +96,9 @@ export function Sidebar() {
           {collapsed && <Trophy className="h-5 w-5 text-primary" />}
         </div>
 
-        {/* Product Selector */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Link
-              href="/products"
-              className={cn(
-                'flex items-center gap-2 border-b px-4 py-2.5 text-sm transition-colors hover:bg-accent',
-                collapsed && 'justify-center px-0'
-              )}
-            >
-              <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
-              {!collapsed && (
-                <span className="truncate font-medium">
-                  {selectedProductName || 'Select product...'}
-                </span>
-              )}
-            </Link>
-          </TooltipTrigger>
-          {collapsed && (
-            <TooltipContent side="right">
-              {selectedProductName || 'Select product'}
-            </TooltipContent>
-          )}
-        </Tooltip>
+        {/* AUDIT S3-8: inline product switcher — label + list come from the same
+            server-resolved source as the data-scoping cookie (no localStorage desync). */}
+        <ProductSwitcher products={products} selectedProductId={selectedProductId} collapsed={collapsed} />
 
         {/* Nav */}
         <nav className="flex-1 overflow-y-auto py-3 px-2 space-y-0.5">
@@ -165,6 +144,110 @@ export function Sidebar() {
         </div>
       </aside>
     </TooltipProvider>
+  )
+}
+
+function ProductSwitcher({ products, selectedProductId, collapsed }: {
+  products: ProductOption[]
+  selectedProductId: string | null
+  collapsed: boolean
+}) {
+  const router = useRouter()
+  const setStoreProduct = useProductStore((s) => s.setSelectedProduct)
+  const [open, setOpen] = useState(false)
+  const [switching, setSwitching] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  const current = products.find((p) => p.id === selectedProductId) ?? null
+
+  // Keep the label store in sync with the server truth (for any other consumers).
+  useEffect(() => {
+    setStoreProduct(current?.id ?? null, current?.name ?? null)
+  }, [current?.id, current?.name, setStoreProduct])
+
+  // Close on outside click.
+  useEffect(() => {
+    if (!open) return
+    const onClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', onClick)
+    return () => document.removeEventListener('mousedown', onClick)
+  }, [open])
+
+  async function selectProduct(id: string) {
+    if (id === selectedProductId) { setOpen(false); return }
+    setSwitching(true)
+    try {
+      const res = await fetch('/api/user/select-product', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ productId: id }),
+      })
+      if (!res.ok) throw new Error()
+      setOpen(false)
+      router.refresh() // re-scope all data + re-resolve the label from the cookie
+    } catch {
+      toast.error('Could not switch product')
+    } finally {
+      setSwitching(false)
+    }
+  }
+
+  if (collapsed) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Link href="/products" className="flex items-center justify-center border-b px-0 py-2.5 hover:bg-accent">
+            <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
+          </Link>
+        </TooltipTrigger>
+        <TooltipContent side="right">{current?.name || 'Select product'}</TooltipContent>
+      </Tooltip>
+    )
+  }
+
+  return (
+    <div className="relative border-b" ref={ref}>
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        disabled={switching}
+        className="flex w-full items-center gap-2 px-4 py-2.5 text-sm transition-colors hover:bg-accent"
+      >
+        <Package className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <span className="truncate font-medium flex-1 text-left">{current?.name || 'Select product...'}</span>
+        <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-30 max-h-72 overflow-y-auto border-b bg-background shadow-md">
+          {products.length === 0 ? (
+            <p className="px-4 py-3 text-xs text-muted-foreground">No products available.</p>
+          ) : (
+            products.map((p) => (
+              <button
+                key={p.id}
+                type="button"
+                onClick={() => selectProduct(p.id)}
+                className={cn(
+                  'flex w-full items-center gap-2 px-4 py-2 text-sm hover:bg-accent',
+                  p.id === selectedProductId && 'bg-accent/60 font-medium'
+                )}
+              >
+                <span className="truncate">{p.name}</span>
+              </button>
+            ))
+          )}
+          <Link
+            href="/products"
+            onClick={() => setOpen(false)}
+            className="block border-t px-4 py-2 text-xs text-muted-foreground hover:bg-accent"
+          >
+            Manage products →
+          </Link>
+        </div>
+      )}
+    </div>
   )
 }
 

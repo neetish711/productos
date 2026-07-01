@@ -40,6 +40,34 @@ export function OnboardingWizard({ userId, orgId, currentStep: initial }: Props)
   const [aiKey, setAiKey] = useState('')
   const [aiModel, setAiModel] = useState('claude-sonnet-4-6')
 
+  // AUDIT S3-7: real import state for onboarding step 5.
+  const [importFile, setImportFile] = useState<File | null>(null)
+  const [importPurpose, setImportPurpose] = useState<'features' | 'competitors' | 'comparisons'>('features')
+  const [importing, setImporting] = useState(false)
+  const [importResult, setImportResult] = useState<string | null>(null)
+
+  const runImport = async () => {
+    if (!importFile) { toast.error('Choose a file to import'); return }
+    setImporting(true)
+    setImportResult(null)
+    try {
+      const fd = new FormData()
+      fd.append('file', importFile)
+      fd.append('purpose', importPurpose)
+      const res = await fetch('/api/ingest', { method: 'POST', body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? 'Import failed')
+      const created = data.created ?? data.imported ?? 0
+      const skipped = data.skipped ?? 0
+      setImportResult(`Imported ${created} ${importPurpose}${skipped ? `, skipped ${skipped}` : ''}.`)
+      toast.success('Import complete')
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Import failed')
+    } finally {
+      setImporting(false)
+    }
+  }
+
   const PROVIDER_MODELS: Record<string, string[]> = {
     OPENAI: ['gpt-4o', 'gpt-4o-mini'],
     ANTHROPIC: ['claude-opus-4-6', 'claude-sonnet-4-6', 'claude-haiku-4-5-20251001'],
@@ -243,18 +271,42 @@ export function OnboardingWizard({ userId, orgId, currentStep: initial }: Props)
             </div>
           )}
 
-          {/* Step 4: Import */}
+          {/* Step 4: Import — AUDIT S3-7: a real, optional CSV/XLSX/PDF import. */}
           {step === 4 && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                You can import existing roadmap and competitive analysis data from Excel/CSV files.
-                You can also do this later from the app.
+                Optionally import existing data now (CSV, XLSX, or PDF). You can skip this and import anytime from the app.
               </p>
-              <div className="flex flex-col gap-2">
-                <div className="p-4 rounded-lg border border-dashed flex flex-col items-center gap-2 text-muted-foreground">
-                  <Upload className="h-8 w-8 opacity-40" />
-                  <p className="text-sm">File import available in the app after setup</p>
+              <div className="space-y-3">
+                <div>
+                  <Label>What are you importing?</Label>
+                  <Select value={importPurpose} onValueChange={(v) => setImportPurpose(v as typeof importPurpose)}>
+                    <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="features">Features</SelectItem>
+                      <SelectItem value="competitors">Competitors</SelectItem>
+                      <SelectItem value="comparisons">Comparisons</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
+                <div>
+                  <Label>File</Label>
+                  <Input
+                    type="file"
+                    accept=".csv,.xlsx,.xls,.pdf"
+                    className="mt-1"
+                    onChange={(e) => { setImportFile(e.target.files?.[0] ?? null); setImportResult(null) }}
+                  />
+                </div>
+                <Button variant="outline" onClick={runImport} disabled={importing || !importFile}>
+                  {importing ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <Upload className="h-4 w-4 mr-2" />}
+                  Import file
+                </Button>
+                {importResult && (
+                  <div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-800">
+                    <CheckCircle2 className="h-4 w-4" /> {importResult}
+                  </div>
+                )}
               </div>
               <p className="text-xs text-muted-foreground">Click "Complete Setup" to finish and start using ProductOS</p>
             </div>
