@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 import { getOrgId } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
-import { getProductIdFromRequest } from '@/lib/product-context'
+import { resolveProductIdFromRequest } from '@/lib/product-context'
 import { z } from 'zod'
 
 export async function GET(req: Request) {
   try {
     const orgId = await getOrgId()
-    const productId = getProductIdFromRequest(req)
+    const productId = await resolveProductIdFromRequest(req)
     const accounts = await prisma.account.findMany({
       where: { organizationId: orgId, ...(productId ? { OR: [{ productId }, { productId: null }] } : {}) },
       include: { _count: { select: { updates: true } } },
@@ -33,7 +33,8 @@ export async function POST(req: Request) {
     const orgId = await getOrgId()
     const raw = await req.json()
     const body = schema.parse(raw)
-    const productId = raw.productId || getProductIdFromRequest(req)
+    // AUDIT P0-4: verify the body/cookie productId belongs to the user before stamping it.
+    const productId = await resolveProductIdFromRequest(req, raw.productId)
     const account = await prisma.account.create({ data: { ...body, organizationId: orgId, ...(productId ? { productId } : {}) } })
     return NextResponse.json(account, { status: 201 })
   } catch (e) {

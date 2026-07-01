@@ -1,4 +1,6 @@
 import { cookies } from 'next/headers'
+import { getServerSession } from 'next-auth'
+import { authConfig } from '@/lib/auth/config'
 import { prisma } from '@/lib/db'
 import { canAccessAdminPanel } from '@/lib/permissions'
 
@@ -81,11 +83,39 @@ export async function getAccessibleProductIds(
 }
 
 /**
- * Get selected product ID from cookie in API route context.
- * Use request headers to read cookie when next/headers cookies() isn't available.
+ * Read the raw selectedProductId cookie value from a request (unverified).
+ * Internal helper — do not use for scoping decisions; use
+ * resolveProductIdFromRequest which verifies access.
  */
-export function getProductIdFromRequest(req: Request): string | null {
+function readProductCookie(req: Request): string | null {
   const cookieHeader = req.headers.get('cookie') || ''
   const match = cookieHeader.match(/selectedProductId=([^;]+)/)
-  return match ? match[1] : null
+  return match ? decodeURIComponent(match[1]) : null
+}
+
+/**
+ * AUDIT P0-4: Resolve the effective product for an API request.
+ * The candidate product (from the request body or the selectedProductId cookie)
+ * is client-controlled, so it must be verified against the products the
+ * authenticated user actually has access to. Returns the candidate only when it
+ * is accessible; otherwise null, so callers fall back to their org-scoped query
+ * and can never scope to another tenant's (or an unassigned) product.
+ *
+ * Replaces the old getProductIdFromRequest(), which trusted the raw cookie.
+ */
+export async function resolveProductIdFromRequest(
+  req: Request,
+  explicitProductId?: string | null,
+): Promise<string | null> {
+  const session = await getServerSession(authConfig)
+  const user = session?.user as
+    | { id?: string; organizationId?: string; role?: string }
+    | undefined
+  if (!user?.id || !user.organizationId || !user.role) return null
+
+  const candidate = explicitProductId || readProductCookie(req)
+  if (!candidate) return null
+
+  const accessible = await getAccessibleProductIds(user.id, user.organizationId, user.role)
+  return accessible.includes(candidate) ? candidate : null
 }

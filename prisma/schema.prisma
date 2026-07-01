@@ -2,8 +2,11 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// AUDIT P0-1: PostgreSQL for all environments (dev + prod). SQLite on Railway was
+// ephemeral and wiped every tenant's data on redeploy. Local dev also uses Postgres
+// so migrations are provider-consistent and testable before deploy.
 datasource db {
-  provider = "sqlite"
+  provider = "postgresql"
   url      = env("DATABASE_URL")
 }
 

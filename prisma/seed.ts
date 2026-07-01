@@ -76,17 +76,11 @@ async function main() {
     },
   })
 
-  // Our Features — two-phase: base create (known fields) + raw UPDATE (extended fields)
-  // Helper for updating intelligence fields via raw SQL (bypasses stale Prisma client)
+  // AUDIT P0-3: intelligence fields are declared on OurFeature — typed Prisma update
+  // (was raw SQL with SQLite-only `?` placeholders).
   async function setFeatureIntel(id: string, intel: Record<string, string | boolean | number | null>) {
-    const entries = Object.entries(intel)
-    if (entries.length === 0) return
-    const setClauses = entries.map(([k]) => `"${k}" = ?`).join(', ')
-    await (prisma as any).$executeRawUnsafe(
-      `UPDATE "OurFeature" SET ${setClauses} WHERE "id" = ?`,
-      ...entries.map(([, v]) => v),
-      id
-    )
+    if (Object.keys(intel).length === 0) return
+    await prisma.ourFeature.update({ where: { id }, data: intel as any })
   }
 
   const featureBaseData = [
@@ -2193,10 +2187,11 @@ Write 2-3 paragraphs covering: what it does, how it's positioned, who it targets
       status: 'COMPLETED',
     },
   })
-  await prisma.$executeRawUnsafe(
-    `UPDATE "WorkflowRun" SET "totalTokens" = ?, "estimatedCost" = ? WHERE "id" = ?`,
-    45230, 0.0678, wfRun.id
-  )
+  // AUDIT P0-3: typed Prisma update (was SQLite-only `?` raw SQL).
+  await prisma.workflowRun.update({
+    where: { id: wfRun.id },
+    data: { totalTokens: 45230, estimatedCost: 0.0678 },
+  })
 
   await (prisma as any).workflowStepRun.createMany({
     data: [

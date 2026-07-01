@@ -3,6 +3,112 @@ import { decrypt } from '@/lib/encryption'
 import type { AIProviderClient, AICompletionOptions, AICompletionResult, AIProviderType } from '@/types/ai'
 import { estimateCost } from '@/types/ai'
 
+// ─── AUDIT P0-7: Usage logging + per-org budget enforcement ────────────────────
+// Previously nothing checked spend before an LLM call and only one route logged
+// usage. We wrap every client's complete() so ALL call sites are metered and
+// bounded centrally.
+
+/** Thrown when an org exceeds its monthly LLM token budget. Routes should map
+ *  this to HTTP 429. */
+export class LLMBudgetExceededError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'LLMBudgetExceededError'
+  }
+}
+
+// 0 or unset in env => fall back to this default; a per-org override may be set
+// in Organization.settingsJson as { "llmMonthlyTokenBudget": <number> }.
+// Set the org/env budget to 0 to disable the cap (unlimited).
+const DEFAULT_MONTHLY_TOKEN_BUDGET = Number(process.env.LLM_MONTHLY_TOKEN_BUDGET ?? 5_000_000)
+
+function startOfCurrentMonth(): Date {
+  const now = new Date()
+  return new Date(now.getFullYear(), now.getMonth(), 1)
+}
+
+async function getOrgMonthlyTokenBudget(orgId: string): Promise<number> {
+  const org = await prisma.organization.findUnique({
+    where: { id: orgId },
+    select: { settingsJson: true },
+  })
+  try {
+    const settings = JSON.parse(org?.settingsJson ?? '{}')
+    if (typeof settings.llmMonthlyTokenBudget === 'number' && settings.llmMonthlyTokenBudget >= 0) {
+      return settings.llmMonthlyTokenBudget
+    }
+  } catch {
+    // fall through to env default
+  }
+  return DEFAULT_MONTHLY_TOKEN_BUDGET
+}
+
+async function assertWithinBudget(orgId: string): Promise<void> {
+  const budget = await getOrgMonthlyTokenBudget(orgId)
+  if (!Number.isFinite(budget) || budget <= 0) return // 0/disabled = unlimited
+  const agg = await prisma.promptExecutionLog.aggregate({
+    where: { organizationId: orgId, createdAt: { gte: startOfCurrentMonth() } },
+    _sum: { totalTokens: true },
+  })
+  const used = agg._sum.totalTokens ?? 0
+  if (used >= budget) {
+    throw new LLMBudgetExceededError(
+      `Monthly LLM token budget exceeded (${used.toLocaleString()}/${budget.toLocaleString()} tokens). ` +
+        `Raise the limit in organization settings or wait for the next billing cycle.`,
+    )
+  }
+}
+
+async function logExecution(
+  orgId: string,
+  info: { provider?: string; model?: string; inputTokens?: number; outputTokens?: number; totalTokens?: number; estimatedCost?: number; durationMs?: number },
+  success: boolean,
+  errorMessage?: string,
+): Promise<void> {
+  try {
+    await prisma.promptExecutionLog.create({
+      data: {
+        organizationId: orgId,
+        provider: info.provider ?? 'unknown',
+        model: info.model ?? 'unknown',
+        inputTokens: info.inputTokens ?? 0,
+        outputTokens: info.outputTokens ?? 0,
+        totalTokens: info.totalTokens ?? 0,
+        estimatedCost: info.estimatedCost ?? 0,
+        durationMs: info.durationMs ?? 0,
+        success,
+        errorMessage: errorMessage ?? null,
+      },
+    })
+  } catch (e) {
+    // Logging must never break a generation; surface but don't throw.
+    console.error('Failed to write PromptExecutionLog:', e)
+  }
+}
+
+/** Wrap a client so every complete() checks the org budget first and logs after. */
+function withUsageTracking(client: AIProviderClient, orgId: string): AIProviderClient {
+  const originalComplete = client.complete.bind(client)
+  client.complete = async (opts: AICompletionOptions): Promise<AICompletionResult> => {
+    await assertWithinBudget(orgId)
+    try {
+      const result = await originalComplete(opts)
+      await logExecution(orgId, result, true)
+      return result
+    } catch (err: any) {
+      if (err instanceof LLMBudgetExceededError) throw err
+      await logExecution(
+        orgId,
+        { provider: client.provider, model: opts.model ?? client.defaultModel },
+        false,
+        err?.message,
+      )
+      throw err
+    }
+  }
+  return client
+}
+
 // ─── OpenAI Adapter ───────────────────────────────────────────────────────────
 class OpenAIClient implements AIProviderClient {
   provider: AIProviderType = 'openai'
@@ -118,13 +224,27 @@ export async function getAIClient(orgId: string): Promise<AIProviderClient> {
 
   if (!config) {
     // Fallback to env vars for dev convenience
-    if (process.env.ANTHROPIC_API_KEY) return createAIClient('anthropic', process.env.ANTHROPIC_API_KEY, 'claude-sonnet-4-6')
-    if (process.env.OPENAI_API_KEY) return createAIClient('openai', process.env.OPENAI_API_KEY, 'gpt-4o-mini')
+    if (process.env.ANTHROPIC_API_KEY) return withUsageTracking(createAIClient('anthropic', process.env.ANTHROPIC_API_KEY, 'claude-sonnet-4-6'), orgId)
+    if (process.env.OPENAI_API_KEY) return withUsageTracking(createAIClient('openai', process.env.OPENAI_API_KEY, 'gpt-4o-mini'), orgId)
     throw new Error('No active LLM configuration found. Please configure an LLM provider in Settings > LLM Configuration.')
   }
 
   const apiKey = decrypt(config.apiKeyEncrypted, config.iv)
-  return createAIClient(config.provider.toLowerCase() as AIProviderType, apiKey, config.defaultModel)
+  // AUDIT P0-7: meter + budget-check every call made through this client.
+  return withUsageTracking(createAIClient(config.provider.toLowerCase() as AIProviderType, apiKey, config.defaultModel), orgId)
+}
+
+/**
+ * AUDIT P0-7: Resolve a usage-tracked client for a specific saved LLMConfig.
+ * Centralizes the decrypt+createAIClient logic that routes previously inlined
+ * (which bypassed budget/logging). Returns null when the config isn't found for
+ * this org, so callers can fall back to getAIClient(orgId).
+ */
+export async function getAIClientForConfigId(orgId: string, configId: string): Promise<AIProviderClient | null> {
+  const config = await prisma.lLMConfig.findFirst({ where: { id: configId, organizationId: orgId } })
+  if (!config) return null
+  const apiKey = decrypt(config.apiKeyEncrypted, config.iv)
+  return withUsageTracking(createAIClient(config.provider.toLowerCase() as AIProviderType, apiKey, config.defaultModel), orgId)
 }
 
 /**
@@ -139,9 +259,10 @@ export async function getAIClientForRole(orgId: string, role: string): Promise<A
 
   if (roleConfig) {
     const apiKey = decrypt(roleConfig.apiKeyEncrypted, roleConfig.iv)
-    return createAIClient(roleConfig.provider.toLowerCase() as AIProviderType, apiKey, roleConfig.defaultModel)
+    // AUDIT P0-7: meter + budget-check every call made through this client.
+    return withUsageTracking(createAIClient(roleConfig.provider.toLowerCase() as AIProviderType, apiKey, roleConfig.defaultModel), orgId)
   }
 
-  // Fall back to default active config
+  // Fall back to default active config (already usage-tracked by getAIClient).
   return getAIClient(orgId)
 }

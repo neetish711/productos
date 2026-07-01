@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server'
 import { getOrgId } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
-import { getProductIdFromRequest } from '@/lib/product-context'
+import { resolveProductIdFromRequest } from '@/lib/product-context'
 import { z } from 'zod'
 import { computeRICEScore } from '@/lib/utils'
 
 export async function GET(req: Request) {
   try {
     const orgId = await getOrgId()
-    const productId = getProductIdFromRequest(req)
+    // AUDIT P0-4: verified accessible productId (or null) — closes the same
+    // cross-tenant read the productId-only filter had before.
+    const productId = await resolveProductIdFromRequest(req)
     const { searchParams } = new URL(req.url)
     const aiOnly = searchParams.get('ai') === 'true'
     const ideasOnly = searchParams.get('ideas') === 'true'

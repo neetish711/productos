@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getOrgId } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
-import { getProductIdFromRequest } from '@/lib/product-context'
+import { resolveProductIdFromRequest } from '@/lib/product-context'
 import { z } from 'zod'
 
 function computeHealth(c: {
@@ -67,7 +67,7 @@ function computeHealth(c: {
 export async function GET(req: Request) {
   try {
     const orgId = await getOrgId()
-    const productId = getProductIdFromRequest(req)
+    const productId = await resolveProductIdFromRequest(req)
     const raw = await prisma.competitor.findMany({
       where: { organizationId: orgId, ...(productId ? { OR: [{ productId }, { productId: null }] } : {}) },
       include: {
@@ -123,8 +123,8 @@ export async function POST(req: Request) {
     const orgId = await getOrgId()
     const raw = await req.json()
     const body = createSchema.parse(raw)
-    // Use productId from body, or fall back to selected product cookie
-    const productId = raw.productId || getProductIdFromRequest(req)
+    // AUDIT P0-4: verify body/cookie productId belongs to the user before stamping it.
+    const productId = await resolveProductIdFromRequest(req, raw.productId)
     const competitor = await prisma.competitor.create({ data: { ...body, organizationId: orgId, ...(productId ? { productId } : {}) } })
     return NextResponse.json(competitor, { status: 201 })
   } catch (e) {

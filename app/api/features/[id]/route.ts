@@ -6,14 +6,12 @@ import { z } from 'zod'
 export async function GET(_: Request, { params }: { params: { id: string } }) {
   try {
     const orgId = await getOrgId()
-    const rows = await prisma.$queryRawUnsafe<any[]>(
-      `SELECT f.* FROM "OurFeature" f
-       JOIN "Product" p ON p.id = f."productId"
-       WHERE f.id = ? AND p."organizationId" = ?`,
-      params.id, orgId
-    )
-    if (!rows[0]) return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    return NextResponse.json(rows[0])
+    // AUDIT P0-3: typed Prisma (was SQLite-only `?` raw SQL).
+    const feature = await prisma.ourFeature.findFirst({
+      where: { id: params.id, product: { organizationId: orgId } },
+    })
+    if (!feature) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    return NextResponse.json(feature)
   } catch { return NextResponse.json({ error: 'Unauthorized' }, { status: 401 }) }
 }
 

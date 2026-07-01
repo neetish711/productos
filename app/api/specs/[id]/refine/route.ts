@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { prisma } from '@/lib/db'
-import { getAIClient } from '@/lib/ai/provider'
+import { getAIClient, LLMBudgetExceededError } from '@/lib/ai/provider'
 import { getServerSession } from 'next-auth'
 import { authConfig } from '@/lib/auth/config'
 
@@ -28,14 +28,17 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     })
 
     const newVersion = spec.version + 1
+    // AUDIT P0-7: usage is now logged centrally in the provider wrapper — the
+    // manual promptExecutionLog.create here was removed to avoid double-counting.
     await prisma.$transaction([
       prisma.spec.update({ where: { id: params.id }, data: { contentMd: result.content, version: newVersion } }),
       prisma.specVersion.create({ data: { specId: params.id, version: newVersion, contentMd: result.content, changedByUserId: userId, changeSummary: `AI refined: ${instruction.slice(0, 80)}` } }),
-      prisma.promptExecutionLog.create({ data: { organizationId: orgId, provider: result.provider, model: result.model, inputTokens: result.inputTokens, outputTokens: result.outputTokens, totalTokens: result.totalTokens, estimatedCost: result.estimatedCost, durationMs: result.durationMs } }),
     ])
 
     return NextResponse.json({ content: result.content, version: newVersion })
   } catch (err: any) {
+    // AUDIT P0-7: surface budget exhaustion as 429 so the UI can show a clear message.
+    if (err instanceof LLMBudgetExceededError) return NextResponse.json({ error: err.message }, { status: 429 })
     return NextResponse.json({ error: err.message ?? 'Error' }, { status: 500 })
   }
 }

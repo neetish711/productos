@@ -5,9 +5,12 @@ import { competitorRefreshWorkflow } from '@/lib/workflow-engine/definitions/com
 
 // This route is called by cron or manually
 export async function POST(req: Request) {
-  // Verify cron secret if called by scheduler
-  const secret = req.headers.get('x-cron-secret')
-  if (secret && secret !== process.env.CRON_SECRET) {
+  // AUDIT P0-8: Require the cron secret unconditionally. Previously the check was
+  // skipped when the header was absent (`if (secret && secret !== ...)`), so an
+  // unauthenticated POST with no header ran workflows for every org (cost DoS).
+  const expected = process.env.CRON_SECRET
+  const provided = req.headers.get('x-cron-secret')
+  if (!expected || !provided || provided !== expected) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 

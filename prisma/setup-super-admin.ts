@@ -2,14 +2,22 @@
  * Setup script: Creates the designated Super Admin user.
  * Run: npx tsx prisma/setup-super-admin.ts
  * Also runs automatically during build on Railway.
+ *
+ * AUDIT P0-6: credentials are read from environment variables, never hardcoded.
+ * Configure these in your deploy environment:
+ *   SUPER_ADMIN_EMAIL     (required — if unset, this script is a no-op)
+ *   SUPER_ADMIN_PASSWORD  (optional — a strong random password is generated and
+ *                          printed once on first creation if omitted)
+ *   SUPER_ADMIN_NAME      (optional)
+ *   SUPER_ADMIN_ORG       (optional, defaults to "RedProduct")
  */
 import { PrismaClient } from '@prisma/client'
 import bcrypt from 'bcryptjs'
+import { randomBytes } from 'crypto'
 
-const SUPER_ADMIN_EMAIL = 'nitish@redproduct.com'
-const SUPER_ADMIN_PASSWORD = 'Qwerty@54321'
-const SUPER_ADMIN_NAME = 'Nitish (Super Admin)'
-const ORG_NAME = 'RedProduct'
+const SUPER_ADMIN_EMAIL = process.env.SUPER_ADMIN_EMAIL
+const SUPER_ADMIN_NAME = process.env.SUPER_ADMIN_NAME || 'Super Admin'
+const ORG_NAME = process.env.SUPER_ADMIN_ORG || 'RedProduct'
 
 const ALL_PERMISSIONS = [
   'view_roadmap','create_roadmap','edit_roadmap','delete_roadmap',
@@ -21,15 +29,24 @@ const ALL_PERMISSIONS = [
   'manage_users','manage_products','manage_permissions','manage_pending_requests','assign_senior_pm',
 ]
 
+function orgSlug(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, '-')
+}
+
 async function main() {
+  // AUDIT P0-6: do nothing (rather than seed a well-known account) when unconfigured.
+  if (!SUPER_ADMIN_EMAIL) {
+    console.warn('SUPER_ADMIN_EMAIL not set — skipping super admin setup. Set it to provision the initial admin.')
+    return
+  }
+
   const prisma = new PrismaClient()
 
   try {
-    // Check if super admin already exists
     const existing = await prisma.user.findUnique({ where: { email: SUPER_ADMIN_EMAIL } })
     if (existing) {
-      // Ensure they are SUPER_ADMIN
-      if (existing.role !== 'SUPER_ADMIN') {
+      // Ensure they are SUPER_ADMIN, but never reset an existing password.
+      if (existing.role !== 'SUPER_ADMIN' || existing.status !== 'APPROVED') {
         await prisma.user.update({
           where: { id: existing.id },
           data: {
@@ -45,20 +62,27 @@ async function main() {
       return
     }
 
-    // Find or create org
-    let org = await prisma.organization.findFirst({ where: { name: ORG_NAME } })
+    // AUDIT DB#6: look up org by unique slug (name is not unique).
+    const slug = orgSlug(ORG_NAME)
+    let org = await prisma.organization.findUnique({ where: { slug } })
     if (!org) {
-      org = await prisma.organization.create({
-        data: {
-          name: ORG_NAME,
-          slug: ORG_NAME.toLowerCase().replace(/\s+/g, '-'),
-        },
-      })
+      org = await prisma.organization.create({ data: { name: ORG_NAME, slug } })
       console.log(`Created organization: ${ORG_NAME}`)
     }
 
-    // Create super admin user
-    const passwordHash = await bcrypt.hash(SUPER_ADMIN_PASSWORD, 12)
+    // AUDIT P0-6: use the configured password, or generate a strong random one
+    // and print it exactly once so the operator can capture and rotate it.
+    let password = process.env.SUPER_ADMIN_PASSWORD
+    if (!password) {
+      password = randomBytes(18).toString('base64url')
+      console.log('──────────────────────────────────────────────────────────────')
+      console.log(`Generated Super Admin password for ${SUPER_ADMIN_EMAIL}:`)
+      console.log(`  ${password}`)
+      console.log('Store it now and change it after first login — it is not shown again.')
+      console.log('──────────────────────────────────────────────────────────────')
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12)
     const user = await prisma.user.create({
       data: {
         name: SUPER_ADMIN_NAME,
@@ -72,7 +96,7 @@ async function main() {
     })
     console.log(`Created Super Admin: ${SUPER_ADMIN_EMAIL}`)
 
-    // Create default product if none exists
+    // Ensure a default product + access exist (idempotent).
     let product = await prisma.product.findFirst({ where: { organizationId: org.id } })
     if (!product) {
       product = await prisma.product.create({
@@ -86,7 +110,6 @@ async function main() {
       console.log('Created default product')
     }
 
-    // Grant product access
     await prisma.userProductAccess.create({
       data: { userId: user.id, productId: product.id },
     }).catch(() => {}) // Skip if exists

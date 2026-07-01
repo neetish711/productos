@@ -4,48 +4,18 @@ import { prisma } from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
 
-// Extended fields not known to the stale Prisma client — written/read via raw SQL
-const EXTENDED_FIELDS = [
-  'build', 'owner', 'coverImageUrl', 'targetUsers', 'valueProposition',
-  'platform', 'maturityLevel', 'isCustomerFacing', 'isFeatured',
-  'docsLinks', 'setupLinks', 'designFiles', 'releaseNotes',
-  'competitorMappings', 'configDetails', 'useCases', 'metadataJson',
-  'introducedInBuild', 'updatedInBuild', 'changelogJson', 'contentBlocksJson',
-] as const
-
-async function applyExtendedFields(id: string, data: Record<string, unknown>) {
-  const entries = EXTENDED_FIELDS
-    .filter((k) => k in data && data[k] !== undefined)
-    .map((k) => [k, data[k]] as [string, unknown])
-  if (entries.length === 0) return
-  const setClauses = entries.map(([k]) => `"${k}" = ?`).join(', ')
-  await prisma.$executeRawUnsafe(
-    `UPDATE "OurFeature" SET ${setClauses} WHERE "id" = ?`,
-    ...entries.map(([, v]) => (typeof v === 'boolean' ? (v ? 1 : 0) : v)),
-    id
-  )
-}
+// AUDIT P0-3: These fields are all declared on the OurFeature model, so they are
+// written/read through the typed Prisma client. The previous raw-SQL shim existed
+// only to work around a stale Prisma client on Windows dev and used SQLite-only
+// `?` placeholders + boolean-as-0/1, both of which break on PostgreSQL.
 
 export async function getOurFeatures(orgId: string, productId?: string) {
-  // Use raw SQL so all columns (including new ones not in stale client) are returned
-  if (productId) {
-    const rows = await prisma.$queryRawUnsafe<any[]>(`
-      SELECT f.*, p.name as "productName"
-      FROM "OurFeature" f
-      JOIN "Product" p ON p.id = f."productId"
-      WHERE p."organizationId" = ? AND f."productId" = ?
-      ORDER BY f."updatedAt" DESC
-    `, orgId, productId)
-    return rows
-  }
-  const rows = await prisma.$queryRawUnsafe<any[]>(`
-    SELECT f.*, p.name as "productName"
-    FROM "OurFeature" f
-    JOIN "Product" p ON p.id = f."productId"
-    WHERE p."organizationId" = ?
-    ORDER BY f."updatedAt" DESC
-  `, orgId)
-  return rows
+  const rows = await prisma.ourFeature.findMany({
+    where: { product: { organizationId: orgId }, ...(productId ? { productId } : {}) },
+    include: { product: { select: { name: true } } },
+    orderBy: { updatedAt: 'desc' },
+  })
+  return rows.map(({ product, ...f }) => ({ ...f, productName: product.name }))
 }
 
 export async function getOurFeature(id: string, orgId: string) {
@@ -107,20 +77,11 @@ export async function createOurFeature(orgId: string, data: z.infer<typeof creat
     }
   }
 
-  // Create with only base fields (stale client knows these)
+  // AUDIT P0-3: write base + intelligence fields in one typed create.
+  const { productId: _ignored, ...featureData } = parsed
   const feature = await prisma.ourFeature.create({
-    data: {
-      productId: product.id,
-      name: parsed.name,
-      description: parsed.description,
-      category: parsed.category,
-      status: parsed.status,
-      tags: parsed.tags,
-    },
+    data: { ...featureData, productId: product.id },
   })
-
-  // Apply extended fields via raw SQL
-  await applyExtendedFields(feature.id, parsed)
 
   revalidatePath('/features')
   return feature
@@ -159,20 +120,14 @@ export async function updateOurFeature(id: string, orgId: string, data: z.infer<
   const existing = await prisma.ourFeature.findFirst({ where: { id, product: { organizationId: orgId } } })
   if (!existing) throw new Error('Feature not found')
 
-  // Update base fields the stale client knows about
-  const baseUpdate: Record<string, unknown> = {}
-  if (parsed.name !== undefined) baseUpdate.name = parsed.name
-  if (parsed.description !== undefined) baseUpdate.description = parsed.description
-  if (parsed.category !== undefined) baseUpdate.category = parsed.category
-  if (parsed.status !== undefined) baseUpdate.status = parsed.status
-  if (parsed.tags !== undefined) baseUpdate.tags = parsed.tags
-
-  if (Object.keys(baseUpdate).length > 0) {
-    await prisma.ourFeature.update({ where: { id }, data: baseUpdate })
+  // AUDIT P0-3: single typed update covering base + intelligence fields.
+  // updateSchema only permits known columns, so spreading defined keys is safe.
+  const updateData = Object.fromEntries(
+    Object.entries(parsed).filter(([, v]) => v !== undefined),
+  )
+  if (Object.keys(updateData).length > 0) {
+    await prisma.ourFeature.update({ where: { id }, data: updateData })
   }
-
-  // Apply extended fields via raw SQL
-  await applyExtendedFields(id, parsed)
 
   revalidatePath('/features')
   return { id, ...parsed }

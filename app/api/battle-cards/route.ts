@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 import { getOrgId } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
-import { getProductIdFromRequest } from '@/lib/product-context'
+import { resolveProductIdFromRequest } from '@/lib/product-context'
 import { getAIClient } from '@/lib/ai/provider'
 
 export async function GET(req: Request) {
   try {
     const orgId = await getOrgId()
-    const productId = getProductIdFromRequest(req)
+    const productId = await resolveProductIdFromRequest(req)
     const cards = await prisma.battleCard.findMany({
       where: { organizationId: orgId, ...(productId ? { productId } : {}) },
       include: { ourFeature: true, competitors: true },
@@ -22,7 +22,8 @@ export async function POST(req: Request) {
     const orgId = await getOrgId()
     const body = await req.json()
     const { ourFeatureId, competitorIds, generate } = body
-    const productId = body.productId || getProductIdFromRequest(req)
+    // AUDIT P0-4: verify body/cookie productId belongs to the user before stamping it.
+    const productId = await resolveProductIdFromRequest(req, body.productId)
 
     if (!generate) {
       // Manual creation

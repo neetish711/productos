@@ -15,8 +15,20 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
     const { userIds } = z.object({ userIds: z.array(z.string()) }).parse(await req.json())
 
+    // AUDIT P0-9: verify the product and every user belong to the caller's org
+    // before granting access, preventing cross-tenant product/user assignment.
+    const orgId = session.user.organizationId
+    const product = await prisma.product.findFirst({ where: { id: params.id, organizationId: orgId } })
+    if (!product) return NextResponse.json({ error: 'Product not found' }, { status: 404 })
+
+    const orgUsers = await prisma.user.findMany({
+      where: { id: { in: userIds }, organizationId: orgId },
+      select: { id: true },
+    })
+    const validUserIds = orgUsers.map((u) => u.id)
+
     await (prisma.userProductAccess.createMany as any)({
-      data: userIds.map((uid) => ({ userId: uid, productId: params.id })),
+      data: validUserIds.map((uid) => ({ userId: uid, productId: params.id })),
       skipDuplicates: true,
     })
 

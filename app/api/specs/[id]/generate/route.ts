@@ -1,8 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getOrgId, getSession } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
-import { getAIClient, createAIClient } from '@/lib/ai/provider'
-import { decrypt } from '@/lib/encryption'
+import { getAIClient, getAIClientForConfigId, LLMBudgetExceededError } from '@/lib/ai/provider'
 import { z } from 'zod'
 
 // ---------------------------------------------------------------------------
@@ -76,13 +75,11 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!item) return NextResponse.json({ error: 'No roadmap item linked' }, { status: 400 })
 
     // ── Resolve AI client ─────────────────────────────────────────────────
-    let aiClient: any
+    // AUDIT P0-7: route through the usage-tracked factory so the llmConfigId path
+    // is budget-checked and logged like every other call site.
+    let aiClient: any = null
     if (body.llmConfigId) {
-      const config = await prisma.lLMConfig.findFirst({ where: { id: body.llmConfigId, organizationId: orgId } })
-      if (config) {
-        const apiKey = decrypt(config.apiKeyEncrypted, config.iv)
-        aiClient = createAIClient(config.provider.toLowerCase() as any, apiKey, config.defaultModel)
-      }
+      aiClient = await getAIClientForConfigId(orgId, body.llmConfigId)
     }
     if (!aiClient) aiClient = await getAIClient(orgId)
 
@@ -233,6 +230,8 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   } catch (e) {
     console.error('PRD generation error:', e)
     if (e instanceof z.ZodError) return NextResponse.json({ error: e.errors }, { status: 400 })
+    // AUDIT P0-7: surface budget exhaustion as 429 so the UI can show a clear message.
+    if (e instanceof LLMBudgetExceededError) return NextResponse.json({ error: e.message }, { status: 429 })
     return NextResponse.json({ error: e instanceof Error ? e.message : 'Generation failed' }, { status: 500 })
   }
 }

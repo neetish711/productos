@@ -4,12 +4,11 @@ import { prisma } from '@/lib/db'
 import { maskApiKey } from '@/lib/encryption'
 
 async function getIntegrationStatus(orgId: string, type: string) {
-  const row = await prisma.$queryRawUnsafe<any[]>(
-    `SELECT id, status, configJson, connectedAt, lastTestedAt, errorMessage, apiKeyEncrypted, iv
-     FROM IntegrationConfig WHERE organizationId = ? AND integrationType = ? LIMIT 1`,
-    orgId, type,
-  )
-  const r = row[0]
+  // AUDIT P0-3: typed Prisma (was raw SQL with unquoted identifiers that break on Postgres).
+  const r = await prisma.integrationConfig.findUnique({
+    where: { organizationId_integrationType: { organizationId: orgId, integrationType: type } },
+    select: { id: true, status: true, configJson: true, connectedAt: true, lastTestedAt: true, errorMessage: true, apiKeyEncrypted: true, iv: true },
+  })
   if (!r) return { status: 'NOT_CONNECTED', connected: false }
   return {
     id: r.id,

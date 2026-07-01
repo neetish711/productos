@@ -4,13 +4,11 @@ import { authConfig } from '@/lib/auth/config'
 import { prisma } from '@/lib/db'
 
 async function resolveFeature(id: string, orgId: string) {
-  const rows = await prisma.$queryRawUnsafe<{ id: string; contentBlocksJson: string }[]>(
-    `SELECT f.id, f."contentBlocksJson" FROM "OurFeature" f
-     JOIN "Product" p ON p.id = f."productId"
-     WHERE f.id = ? AND p."organizationId" = ?`,
-    id, orgId
-  )
-  return rows[0] ?? null
+  // AUDIT P0-3: typed Prisma (was SQLite-only `?` raw SQL).
+  return prisma.ourFeature.findFirst({
+    where: { id, product: { organizationId: orgId } },
+    select: { id: true, contentBlocksJson: true },
+  })
 }
 
 export async function GET(_req: Request, { params }: { params: { id: string } }) {
@@ -35,10 +33,10 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
   const blocks = await req.json()
   if (!Array.isArray(blocks)) return NextResponse.json({ error: 'Expected array' }, { status: 400 })
 
-  await prisma.$executeRawUnsafe(
-    `UPDATE "OurFeature" SET "contentBlocksJson" = ? WHERE "id" = ?`,
-    JSON.stringify(blocks),
-    params.id
-  )
+  // AUDIT P0-3: typed Prisma (was SQLite-only `?` raw SQL).
+  await prisma.ourFeature.update({
+    where: { id: params.id },
+    data: { contentBlocksJson: JSON.stringify(blocks) },
+  })
   return NextResponse.json({ ok: true })
 }

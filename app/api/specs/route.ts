@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server'
 import { getOrgId, getSession } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
-import { getProductIdFromRequest } from '@/lib/product-context'
+import { resolveProductIdFromRequest } from '@/lib/product-context'
 import { z } from 'zod'
 import { computeRICEScore } from '@/lib/utils'
 
 export async function GET(req: Request) {
   try {
     const orgId = await getOrgId()
-    const productId = getProductIdFromRequest(req)
+    // AUDIT P0-4: verified against the user's accessible products; a foreign/
+    // unassigned productId resolves to null (falls through to org-scoped query).
+    const productId = await resolveProductIdFromRequest(req)
     let productFilter: Record<string, unknown>
     if (productId) {
       productFilter = { productId }

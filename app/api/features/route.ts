@@ -1,13 +1,13 @@
 import { NextResponse } from 'next/server'
 import { getOrgId } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
-import { getProductIdFromRequest } from '@/lib/product-context'
+import { resolveProductIdFromRequest } from '@/lib/product-context'
 import { z } from 'zod'
 
 export async function GET(req: Request) {
   try {
     const orgId = await getOrgId()
-    const productId = getProductIdFromRequest(req)
+    const productId = await resolveProductIdFromRequest(req)
     const features = await prisma.ourFeature.findMany({
       where: {
         product: { organizationId: orgId },
