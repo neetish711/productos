@@ -3,6 +3,22 @@
 import { prisma } from '@/lib/db'
 import { revalidatePath } from 'next/cache'
 import { z } from 'zod'
+import { getServerSession } from 'next-auth'
+import { authConfig } from '@/lib/auth/config'
+import { hasPermission, type PermissionKey } from '@/lib/permissions'
+
+// AUDIT S2-6: these server actions are invoked from a client component, so the
+// caller-supplied orgId was untrusted and none of them checked permissions —
+// a view-only user could create/delete features by calling the action directly.
+// Every mutation now derives orgId from the authenticated session and enforces
+// the matching permission server-side.
+async function requireFeatureAuth(permission: PermissionKey): Promise<string> {
+  const session = await getServerSession(authConfig)
+  const user = session?.user as { organizationId?: string; role?: string; permissions?: string[] } | undefined
+  if (!user?.organizationId || !user.role) throw new Error('Unauthorized')
+  if (!hasPermission(user.role, user.permissions ?? [], permission)) throw new Error('Forbidden')
+  return user.organizationId
+}
 
 // AUDIT P0-3: These fields are all declared on the OurFeature model, so they are
 // written/read through the typed Prisma client. The previous raw-SQL shim existed
@@ -59,7 +75,9 @@ const createSchema = z.object({
   ...intelligenceFields,
 })
 
-export async function createOurFeature(orgId: string, data: z.infer<typeof createSchema>) {
+export async function createOurFeature(_orgId: string, data: z.infer<typeof createSchema>) {
+  // AUDIT S2-6: orgId + permission from session; the passed value is ignored.
+  const orgId = await requireFeatureAuth('create_features')
   const parsed = createSchema.parse(data)
 
   // Ensure product exists for this org; auto-create default product if none
@@ -115,7 +133,9 @@ const updateSchema = z.object({
   changelogJson: z.string().optional(),
 })
 
-export async function updateOurFeature(id: string, orgId: string, data: z.infer<typeof updateSchema>) {
+export async function updateOurFeature(id: string, _orgId: string, data: z.infer<typeof updateSchema>) {
+  // AUDIT S2-6: orgId + permission from session; the passed value is ignored.
+  const orgId = await requireFeatureAuth('edit_features')
   const parsed = updateSchema.parse(data)
   const existing = await prisma.ourFeature.findFirst({ where: { id, product: { organizationId: orgId } } })
   if (!existing) throw new Error('Feature not found')
@@ -133,14 +153,18 @@ export async function updateOurFeature(id: string, orgId: string, data: z.infer<
   return { id, ...parsed }
 }
 
-export async function deleteOurFeature(id: string, orgId: string) {
+export async function deleteOurFeature(id: string, _orgId: string) {
+  // AUDIT S2-6: orgId + permission from session; the passed value is ignored.
+  const orgId = await requireFeatureAuth('delete_features')
   const existing = await prisma.ourFeature.findFirst({ where: { id, product: { organizationId: orgId } } })
   if (!existing) throw new Error('Feature not found')
   await prisma.ourFeature.delete({ where: { id } })
   revalidatePath('/features')
 }
 
-export async function bulkDeleteOurFeatures(ids: string[], orgId: string) {
+export async function bulkDeleteOurFeatures(ids: string[], _orgId: string) {
+  // AUDIT S2-6: orgId + permission from session; the passed value is ignored.
+  const orgId = await requireFeatureAuth('delete_features')
   await prisma.ourFeature.deleteMany({
     where: { id: { in: ids }, product: { organizationId: orgId } },
   })

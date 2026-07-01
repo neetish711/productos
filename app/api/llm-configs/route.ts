@@ -1,17 +1,27 @@
 import { NextResponse } from 'next/server'
-import { getOrgId } from '@/lib/auth/utils'
+import { getServerSession } from 'next-auth'
+import { authConfig } from '@/lib/auth/config'
 import { prisma } from '@/lib/db'
 import { encrypt, maskApiKey } from '@/lib/encryption'
+import { canAccessAdminPanel } from '@/lib/permissions'
 import { z } from 'zod'
 
-export async function GET() {
-  try {
-    const orgId = await getOrgId()
-    const configs = await prisma.lLMConfig.findMany({ where: { organizationId: orgId } })
-    return NextResponse.json(configs.map((c) => ({ ...c, apiKeyEncrypted: maskApiKey('hidden'), iv: undefined })))
-  } catch {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+// AUDIT S2-5: LLM configuration holds org-wide encrypted API keys. Restrict all
+// access to admin-panel roles (SUPER_ADMIN / SENIOR_PM / PM) — previously any
+// approved org user (incl. CSM/Sales/Engineering) could read or overwrite it.
+async function requireLlmAdmin() {
+  const session = await getServerSession(authConfig)
+  if (!session?.user || !canAccessAdminPanel(session.user.role)) {
+    return { error: NextResponse.json({ error: 'Forbidden' }, { status: 403 }), orgId: null as string | null }
   }
+  return { error: null, orgId: session.user.organizationId }
+}
+
+export async function GET() {
+  const { error, orgId } = await requireLlmAdmin()
+  if (error) return error
+  const configs = await prisma.lLMConfig.findMany({ where: { organizationId: orgId! } })
+  return NextResponse.json(configs.map((c) => ({ ...c, apiKeyEncrypted: maskApiKey('hidden'), iv: undefined })))
 }
 
 const createSchema = z.object({
@@ -32,7 +42,9 @@ export async function POST(req: Request) {
   let body: z.infer<typeof createSchema>
 
   try {
-    const orgId = await getOrgId()
+    const { error, orgId: gatedOrgId } = await requireLlmAdmin()
+    if (error) return error
+    const orgId = gatedOrgId!
     const raw = await req.json().catch(() => null)
     if (!raw) return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
 

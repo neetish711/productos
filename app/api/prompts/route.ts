@@ -1,7 +1,19 @@
 import { NextResponse } from 'next/server'
+import { getServerSession } from 'next-auth'
+import { authConfig } from '@/lib/auth/config'
 import { getOrgId } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
+import { canAccessAdminPanel } from '@/lib/permissions'
 import { z } from 'zod'
+
+// AUDIT S2-5: prompt templates are used org-wide in every AI generation, so
+// writes are restricted to admin-panel roles (prevents prompt-injection by any
+// approved user). Reading/seeding via GET stays open to authenticated users.
+async function requirePromptAdminOrgId() {
+  const session = await getServerSession(authConfig)
+  if (!session?.user || !canAccessAdminPanel(session.user.role)) return null
+  return session.user.organizationId
+}
 
 // ---------------------------------------------------------------------------
 // Default spec-generation templates — seeded on first access per org
@@ -673,58 +685,32 @@ export async function GET(req: Request) {
     const { searchParams } = new URL(req.url)
     const category = searchParams.get('category')
 
-    // Ensure the 4 default spec-generation templates exist for this org
-    if (!category || category === 'spec-generation') {
-      for (const template of DEFAULT_SPEC_TEMPLATES) {
-        const exists = await prisma.prompt.findFirst({
-          where: { organizationId: orgId, category: 'spec-generation', name: template.name },
-        })
-        if (!exists) {
-          await prisma.prompt.create({
-            data: { ...template, organizationId: orgId },
-          })
-        }
-      }
-    }
-
-    // Ensure competitive intelligence templates exist for this org
-    if (!category || category === 'competitive-intelligence') {
-      for (const template of DEFAULT_CI_TEMPLATES) {
-        const exists = await prisma.prompt.findFirst({
-          where: { organizationId: orgId, category: 'competitive-intelligence', name: template.name },
-        })
-        if (!exists) {
-          await prisma.prompt.create({
-            data: { ...template, organizationId: orgId },
-          })
-        }
-      }
-    }
-
-    // Ensure workflow templates (roadmap, account-intelligence) exist
-    for (const template of DEFAULT_WORKFLOW_TEMPLATES) {
-      if (!category || category === template.category) {
-        const exists = await prisma.prompt.findFirst({
-          where: { organizationId: orgId, category: template.category, name: template.name },
-        })
-        if (!exists) {
-          await prisma.prompt.create({
-            data: { ...template, organizationId: orgId },
-          })
-        }
-      }
-    }
-
-    // Ensure the lovable-generation master prompt exists for this org
-    if (!category || category === 'lovable-generation') {
-      const exists = await prisma.prompt.findFirst({
-        where: { organizationId: orgId, category: 'lovable-generation', name: DEFAULT_LOVABLE_TEMPLATE.name },
+    // AUDIT S2-10: seed defaults with an atomic upsert on the (org, category, name)
+    // unique key. The previous findFirst-then-create was non-atomic, so two
+    // concurrent first-loads for a fresh org both created duplicates. `update: {}`
+    // leaves any user-edited copy untouched.
+    const seedPrompt = (template: { category: string; name: string } & Record<string, unknown>) =>
+      prisma.prompt.upsert({
+        where: {
+          organizationId_category_name: {
+            organizationId: orgId,
+            category: template.category,
+            name: template.name,
+          },
+        },
+        create: { ...(template as any), organizationId: orgId },
+        update: {},
       })
-      if (!exists) {
-        await prisma.prompt.create({
-          data: { ...DEFAULT_LOVABLE_TEMPLATE, organizationId: orgId },
-        })
-      }
+
+    const toSeed = [
+      ...DEFAULT_SPEC_TEMPLATES,
+      ...DEFAULT_CI_TEMPLATES,
+      ...DEFAULT_WORKFLOW_TEMPLATES,
+      DEFAULT_LOVABLE_TEMPLATE,
+    ].filter((t) => !category || category === t.category)
+
+    for (const template of toSeed) {
+      await seedPrompt(template as any)
     }
 
     const prompts = await prisma.prompt.findMany({
@@ -755,7 +741,8 @@ const schema = z.object({
 
 export async function POST(req: Request) {
   try {
-    const orgId = await getOrgId()
+    const orgId = await requirePromptAdminOrgId()
+    if (!orgId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     const body = schema.parse(await req.json())
     const prompt = await prisma.prompt.create({ data: { ...body, organizationId: orgId } })
     return NextResponse.json(prompt, { status: 201 })

@@ -73,21 +73,25 @@ export async function generateCompetitorReport(competitorId: string, orgId: stri
       return acc
     }, {})
 
-    const featuresContext = Object.entries(featuresByCategory).map(([cat, features]) => {
+    // AUDIT S2-2: bound each assembled block so a competitor with hundreds of
+    // features/updates can't overflow the model context and 500 the generation.
+    const clamp = (s: string, max: number) => (s.length <= max ? s : s.slice(0, max) + '\n[... truncated ...]')
+
+    const featuresContext = clamp(Object.entries(featuresByCategory).map(([cat, features]) => {
       const featureList = features.map((f) => {
-        const evidence = f.sourceEvidence.map((e) => `  - [${e.sourceType}] "${e.snippet.slice(0, 120)}" (${e.url})`).join('\n')
-        return `  **${f.name}**: ${f.description}\n${evidence}`
+        const evidence = f.sourceEvidence.slice(0, 3).map((e) => `  - [${e.sourceType}] "${e.snippet.slice(0, 120)}" (${e.url})`).join('\n')
+        return `  **${f.name}**: ${(f.description || '').slice(0, 400)}\n${evidence}`
       }).join('\n')
       return `### ${cat}\n${featureList}`
-    }).join('\n\n')
+    }).join('\n\n'), 30_000)
 
-    const updatesContext = competitor.keyUpdates.map((u) =>
-      `- [${u.detectedAt.toISOString().split('T')[0]}] ${u.title}: ${u.description || u.diffSummaryText}`
-    ).join('\n')
+    const updatesContext = clamp(competitor.keyUpdates.map((u) =>
+      `- [${u.detectedAt.toISOString().split('T')[0]}] ${u.title}: ${(u.description || u.diffSummaryText || '').slice(0, 400)}`
+    ).join('\n'), 8_000)
 
-    const sourcesContext = competitor.managedSources.map((s) =>
+    const sourcesContext = clamp(competitor.managedSources.map((s) =>
       `- ${s.label || s.url} (${s.sourceType}, ${s.status})`
-    ).join('\n')
+    ).join('\n'), 4_000)
 
     const battleCardContext = battleCard
       ? `\n### Existing Battle Card\nStrengths: ${battleCard.strengthsText}\nWeaknesses: ${battleCard.weaknessesText}\nDifferentiators: ${battleCard.differentiatorsText}`

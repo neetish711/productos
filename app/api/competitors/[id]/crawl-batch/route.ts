@@ -57,28 +57,23 @@ export async function POST(req: Request, { params }: { params: { id: string } })
           results.push({ sourceId: source.id, url: source.url, success: false, error: crawled.error })
         }
       } else {
-        // Simulated crawl
+        // AUDIT S2-3: crawler offline — record SIMULATED but do NOT mark success
+        // (no lastSuccessAt, no ACTIVE/OK, no fabricated freshness).
         await prisma.competitorSource.update({
           where: { id: source.id },
-          data: {
-            status: 'ACTIVE',
-            lastCrawledAt: now,
-            lastSuccessAt: now,
-            freshnessScore: 0.5,
-            crawlHealthStatus: 'SIMULATED',
-          },
+          data: { lastCrawledAt: now, crawlHealthStatus: 'SIMULATED' },
         })
-        results.push({ sourceId: source.id, url: source.url, success: true, title: 'Simulated' })
+        results.push({ sourceId: source.id, url: source.url, success: false, error: 'Crawl4AI unavailable — skipped (no content fetched)' })
       }
     }
 
-    // Update competitor status
+    const successCount = results.filter((r) => r.success).length
+
+    // AUDIT S2-3: only advance the competitor to ACTIVE if something real was crawled.
     await prisma.competitor.update({
       where: { id: params.id },
-      data: { lastRefreshAt: new Date(), setupStatus: 'ACTIVE' },
+      data: { lastRefreshAt: new Date(), ...(successCount > 0 ? { setupStatus: 'ACTIVE' } : {}) },
     })
-
-    const successCount = results.filter((r) => r.success).length
     return NextResponse.json({
       total: results.length,
       success: successCount,

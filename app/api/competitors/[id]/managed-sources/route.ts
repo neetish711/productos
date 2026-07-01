@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getOrgId } from '@/lib/auth/utils'
 import { prisma } from '@/lib/db'
 import { z } from 'zod'
+import { assertPublicUrl, SsrfBlockedError } from '@/lib/crawler/url-guard'
 
 const createSchema = z.object({
   url: z.string().url('Must be a valid URL'),
@@ -48,6 +49,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     if (!competitor) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
     const body = createSchema.parse(await req.json())
+
+    // AUDIT S2-4: reject SSRF-unsafe URLs at creation time (early feedback).
+    try {
+      await assertPublicUrl(body.url)
+    } catch (e) {
+      if (e instanceof SsrfBlockedError) return NextResponse.json({ error: e.message }, { status: 400 })
+      throw e
+    }
 
     // Deduplicate on normalized URL
     const normalizedUrl = body.url.replace(/\/$/, '').toLowerCase()

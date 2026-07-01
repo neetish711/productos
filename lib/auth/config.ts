@@ -55,6 +55,7 @@ export const authOptions: NextAuthOptions = {
   callbacks: {
     async jwt({ token, user }) {
       if (user) {
+        // Initial sign-in — copy claims from the authorize() result.
         token.id = user.id
         token.role = (user as any).role
         token.status = (user as any).status
@@ -62,6 +63,26 @@ export const authOptions: NextAuthOptions = {
         token.organizationSlug = (user as any).organizationSlug
         token.onboardingCompleted = (user as any).onboardingCompleted
         token.permissions = (user as any).permissions
+      } else if (token.id) {
+        // AUDIT S2-7: re-validate against the DB on every refresh so a
+        // deactivation / role change / permission change takes effect for an
+        // active session instead of persisting until the token expires (~30d).
+        const dbUser = await prisma.user.findUnique({
+          where: { id: token.id as string },
+          include: { organization: { select: { slug: true, onboardingCompleted: true } } },
+        })
+        if (!dbUser) {
+          // User was deleted — mark unauthorized so middleware blocks it.
+          token.status = 'DEACTIVATED'
+          token.permissions = []
+          return token
+        }
+        token.role = dbUser.role
+        token.status = dbUser.status
+        token.organizationId = dbUser.organizationId
+        token.organizationSlug = dbUser.organization.slug
+        token.onboardingCompleted = dbUser.organization.onboardingCompleted
+        token.permissions = JSON.parse(dbUser.permissionsJson || '[]')
       }
       return token
     },

@@ -25,23 +25,23 @@ export async function POST(
     const crawlerAvailable = await isCrawl4AIAvailable()
 
     if (!crawlerAvailable) {
-      // Fallback: simulated crawl (update timestamps only)
+      // AUDIT S2-3: no content was fetched. Do NOT mark success (no lastSuccessAt,
+      // no ACTIVE/OK, no fabricated freshness) — record a distinct SIMULATED state
+      // and return a non-success response so the UI shows the crawler is offline.
       const updated = await prisma.competitorSource.update({
         where: { id: params.sourceId },
         data: {
-          status: 'ACTIVE',
           lastCrawledAt: now,
-          lastSuccessAt: now,
-          freshnessScore: 0.9 + Math.random() * 0.1,
-          crawlHealthStatus: 'OK',
+          crawlHealthStatus: 'SIMULATED',
         },
       })
       return NextResponse.json({
-        ok: true,
+        ok: false,
+        simulated: true,
         source: updated,
         crawlerUsed: 'simulated',
-        message: 'Crawl4AI not available — timestamps updated (simulated crawl)',
-      })
+        message: 'Crawl4AI is not available — no content was fetched. Configure CRAWL4AI_URL to enable real crawling.',
+      }, { status: 503 })
     }
 
     // Real crawl via Crawl4AI

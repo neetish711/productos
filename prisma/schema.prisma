@@ -721,6 +721,8 @@ model Prompt {
   organization        Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   promptExecutionLogs PromptExecutionLog[]
 
+  // AUDIT S2-10: prevents duplicate templates from the concurrent lazy-seed race.
+  @@unique([organizationId, category, name])
   @@index([organizationId])
   @@index([category])
 }
@@ -966,7 +968,10 @@ model AccessRequest {
   organizationId    String?
   name              String
   email             String
-  requestedRole     String    @default("VIEWER")
+  // AUDIT S2-8: the applicant's password hash is held on the request until an
+  // admin approves — no User row (and no login) is created before approval.
+  passwordHash      String?
+  requestedRole     String    @default("VIEWER") // informational only; NOT applied without admin review
   requestedProductsJson String @default("[]") // JSON array of product IDs
   reason            String    @default("")
   status            String    @default("PENDING") // PENDING | APPROVED | REJECTED

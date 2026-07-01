@@ -7,6 +7,8 @@
  * Configure via env: CRAWL4AI_URL=http://localhost:11235
  */
 
+import { assertPublicUrl, SsrfBlockedError } from './url-guard'
+
 const CRAWL4AI_URL = process.env.CRAWL4AI_URL || 'http://localhost:11235'
 
 export interface CrawlResult {
@@ -33,6 +35,20 @@ export interface CrawlOptions {
  */
 export async function crawlUrl(options: CrawlOptions): Promise<CrawlResult> {
   const { url, waitForSelector, jsCode, timeout = 30000 } = options
+
+  // AUDIT S2-4: SSRF guard — validate before handing the URL to Crawl4AI.
+  try {
+    await assertPublicUrl(url)
+  } catch (err) {
+    return {
+      url,
+      title: '',
+      markdown: '',
+      success: false,
+      wordCount: 0,
+      error: err instanceof SsrfBlockedError ? err.message : 'URL blocked',
+    }
+  }
 
   try {
     const controller = new AbortController()

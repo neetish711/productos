@@ -56,6 +56,7 @@ const evidenceCollection: WorkflowStepDefinition = {
 
     let tokensUsed = 0
     const sourcesProcessed: string[] = []
+    let realCrawlCount = 0
 
     const crawlerAvailable = await isCrawl4AIAvailable()
 
@@ -70,19 +71,28 @@ const evidenceCollection: WorkflowStepDefinition = {
         }
       }
 
-      // Build prompt — with real content if crawled, or ask LLM to use its knowledge
-      const prompt = pageContent
-        ? `You are a competitive intelligence extraction agent. Analyze the following crawled content from ${source.url} for competitor "${competitor.name}".
+      const now = new Date()
+
+      // AUDIT S2-3: if no real content was fetched, do NOT ask the LLM to invent
+      // signals "from what it knows" and do NOT stamp success. Record the source
+      // as un-crawled and move on — fabricated intelligence must never be stored.
+      if (!pageContent) {
+        await prisma.competitorSource.update({
+          where: { id: source.id },
+          data: {
+            lastCrawledAt: now,
+            crawlHealthStatus: crawlerAvailable ? 'NO_CONTENT' : 'SIMULATED',
+          },
+        })
+        continue
+      }
+
+      const prompt = `You are a competitive intelligence extraction agent. Analyze the following crawled content from ${source.url} for competitor "${competitor.name}".
 
 CRAWLED CONTENT:
 ${pageContent}
 
 Extract 2-5 competitive signals from this content. Return as JSON array: [{"signal": "...", "confidence": 0.9, "category": "AI Core|Automation|Integrations|Analytics|Security|Pricing|Other"}]. Return only JSON array.`
-        : `You are a competitive intelligence extraction agent. Analyze the source at ${source.url} for ${competitor.name}.
-
-Note: No crawled content available. Only extract signals you are highly confident about. Set confidence to 0.5 or lower for unverified claims.
-
-Based on what you know about this URL, extract 2-3 competitive signals as JSON array: [{"signal": "...", "confidence": 0.5, "category": "AI Core|Automation|Integrations|Analytics|Security|Pricing|Other"}]. Return only JSON array.`
 
       const result = await aiClient.complete({
         messages: [{ role: 'user', content: prompt }],
@@ -91,29 +101,31 @@ Based on what you know about this URL, extract 2-3 competitive signals as JSON a
       } as any)
       tokensUsed += result.totalTokens ?? 0
       sourcesProcessed.push(source.url)
+      realCrawlCount++
 
-      // Update source with crawl status
-      const now = new Date()
+      // Real content fetched — safe to mark a successful crawl.
       await prisma.competitorSource.update({
         where: { id: source.id },
         data: {
           lastCrawledAt: now,
           lastSuccessAt: now,
           status: 'ACTIVE',
-          freshnessScore: pageContent ? 1.0 : 0.5,
-          crawlHealthStatus: pageContent ? 'OK' : 'SIMULATED',
+          freshnessScore: 1.0,
+          crawlHealthStatus: 'OK',
         },
       })
     }
 
-    // Update competitor lastRefreshAt
+    // AUDIT S2-3: only advance the competitor to ACTIVE if real evidence was collected.
     await prisma.competitor.update({
       where: { id: competitorId },
-      data: { lastRefreshAt: new Date(), setupStatus: 'ACTIVE' },
+      data: { lastRefreshAt: new Date(), ...(realCrawlCount > 0 ? { setupStatus: 'ACTIVE' } : {}) },
     })
 
     return {
-      summary: `Processed ${sourcesProcessed.length} sources for evidence collection.`,
+      summary: realCrawlCount > 0
+        ? `Collected evidence from ${realCrawlCount} crawled source(s).`
+        : `No source content could be crawled (crawler ${crawlerAvailable ? 'returned no content' : 'unavailable'}); no evidence collected.`,
       tokensUsed,
       data: { sourcesProcessed },
     }
@@ -171,7 +183,7 @@ const communitySignals: WorkflowStepDefinition = {
 const changeDetection: WorkflowStepDefinition = {
   name: 'CHANGE_DETECTION',
   required: true,
-  async execute({ ctx, aiClient }) {
+  async execute({ ctx, aiClient, previousResults }) {
     const competitorId = ctx.params?.competitorId
     if (!competitorId) throw new Error('competitorId required in params')
 
@@ -181,7 +193,23 @@ const changeDetection: WorkflowStepDefinition = {
     })
     if (!competitor) throw new Error('Competitor not found')
 
-    // Load existing key updates for deduplication
+    // AUDIT S2-3: change detection must be grounded in real crawled evidence.
+    // Previously this asked the LLM to invent "a realistic recent change" from its
+    // training knowledge and persisted it as a tracked competitor update — i.e.
+    // fabricated intelligence presented as fact. If the evidence step crawled no
+    // real content, we create nothing rather than hallucinate.
+    const evidence = (previousResults?.['EVIDENCE_COLLECTION']?.data as Record<string, any> | undefined)
+    const crawledSources: string[] = evidence?.sourcesProcessed ?? []
+
+    if (crawledSources.length === 0) {
+      return {
+        summary: 'No crawled evidence available — no changes detected (skipped fabricated updates).',
+        data: { updatesCreated: 0, evidenceBacked: true },
+      }
+    }
+
+    // Re-crawl the evidence sources and detect genuinely new content-derived
+    // changes. Only updates backed by fetched content are persisted.
     const existingUpdates = await prisma.competitorKeyUpdate.findMany({
       where: { competitorId },
       orderBy: { detectedAt: 'desc' },
@@ -189,51 +217,64 @@ const changeDetection: WorkflowStepDefinition = {
     })
     const existingTitles = existingUpdates.map(u => u.title)
 
-    // Use LLM to infer what might have changed (simulated since no real crawl)
-    const result = await aiClient.complete({
-      messages: [{
-        role: 'user',
-        content: `Based on your knowledge of ${competitor.name}, suggest 1 realistic recent product change or update that a PM would want to know about. Format as JSON: {"title": "...", "updateType": "NEW_FEATURE|ENHANCEMENT|PRICING_CHANGE", "description": "...", "significance": "HIGH|MEDIUM_HIGH|MEDIUM|LOW"}. Return only JSON object.
-
-Only report changes you have strong evidence for. If you cannot identify a real recent change, return an empty object {}. Do NOT fabricate changes.
-
-Do NOT duplicate any of these already-tracked updates: ${existingTitles.join('; ')}`,
-      }],
-      maxTokens: 300,
-      temperature: 0.4,
-    } as any)
+    const sources = await prisma.competitorSource.findMany({
+      where: { competitorId, url: { in: crawledSources } },
+      take: 5,
+    })
 
     const VALID_SIGNIFICANCE = ['HIGH', 'MEDIUM_HIGH', 'MEDIUM', 'LOW'] as const
-
     let created = 0
-    try {
-      const match = result.content.match(/\{[\s\S]*\}/)
-      if (match) {
-        const change = JSON.parse(match[0])
-        // Skip empty objects (LLM had no confident change to report)
-        if (change.title) {
-          const significance = VALID_SIGNIFICANCE.includes(change.significance)
-            ? change.significance
-            : 'MEDIUM'
-          await prisma.competitorKeyUpdate.create({
-            data: {
-              competitorId,
-              updateType: change.updateType ?? 'ENHANCEMENT',
-              title: change.title,
-              description: change.description ?? '',
-              significance,
-              detectedAt: new Date(),
-            },
-          })
-          created = 1
+    let tokensUsed = 0
+
+    for (const source of sources) {
+      const crawled = await crawlUrl({ url: source.url, timeout: 25000 })
+      if (!crawled.success || !crawled.markdown) continue // evidence required
+      const pageContent = truncateForLLM(crawled.markdown, 6000)
+
+      const result = await aiClient.complete({
+        messages: [{
+          role: 'user',
+          content: `You are a competitive change-detection agent. From the crawled content below for "${competitor.name}", identify at most 1 notable product/pricing change that is explicitly supported by the content. If nothing notable is present, return {}.
+
+CRAWLED CONTENT:
+${pageContent}
+
+Return only JSON: {"title": "...", "updateType": "NEW_FEATURE|ENHANCEMENT|PRICING_CHANGE", "description": "...", "significance": "HIGH|MEDIUM_HIGH|MEDIUM|LOW"}.
+Do NOT infer beyond the content. Do NOT duplicate any of these already-tracked updates: ${existingTitles.join('; ')}`,
+        }],
+        maxTokens: 300,
+        temperature: 0.2,
+      } as any)
+      tokensUsed += result.totalTokens ?? 0
+
+      try {
+        const match = result.content.match(/\{[\s\S]*\}/)
+        if (match) {
+          const change = JSON.parse(match[0])
+          if (change.title && !existingTitles.includes(change.title)) {
+            const significance = VALID_SIGNIFICANCE.includes(change.significance) ? change.significance : 'MEDIUM'
+            await prisma.competitorKeyUpdate.create({
+              data: {
+                competitorId,
+                updateType: change.updateType ?? 'ENHANCEMENT',
+                title: change.title,
+                description: change.description ?? '',
+                significance,
+                detectedAt: new Date(),
+                sourceUrl: source.url,
+              },
+            })
+            existingTitles.push(change.title)
+            created++
+          }
         }
-      }
-    } catch { /* ignore */ }
+      } catch { /* ignore malformed JSON */ }
+    }
 
     return {
-      summary: `Change detection complete. ${created} new update${created === 1 ? '' : 's'} created.`,
-      tokensUsed: result.totalTokens ?? 0,
-      data: { updatesCreated: created },
+      summary: `Change detection complete (evidence-backed). ${created} new update${created === 1 ? '' : 's'} created.`,
+      tokensUsed,
+      data: { updatesCreated: created, evidenceBacked: true },
     }
   },
 }

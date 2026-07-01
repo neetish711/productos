@@ -751,6 +751,7 @@ CREATE TABLE "AccessRequest" (
     "organizationId" TEXT,
     "name" TEXT NOT NULL,
     "email" TEXT NOT NULL,
+    "passwordHash" TEXT,
     "requestedRole" TEXT NOT NULL DEFAULT 'VIEWER',
     "requestedProductsJson" TEXT NOT NULL DEFAULT '[]',
     "reason" TEXT NOT NULL DEFAULT '',
@@ -965,6 +966,9 @@ CREATE INDEX "Prompt_organizationId_idx" ON "Prompt"("organizationId");
 
 -- CreateIndex
 CREATE INDEX "Prompt_category_idx" ON "Prompt"("category");
+
+-- CreateIndex
+CREATE UNIQUE INDEX "Prompt_organizationId_category_name_key" ON "Prompt"("organizationId", "category", "name");
 
 -- CreateIndex
 CREATE INDEX "UploadedFile_organizationId_idx" ON "UploadedFile"("organizationId");

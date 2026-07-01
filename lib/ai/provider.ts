@@ -86,10 +86,36 @@ async function logExecution(
   }
 }
 
+// AUDIT S2-2: hard input-size cap. Assembled DB context (features/updates lists)
+// was unbounded and overflowed the model window → "prompt too long" 500s. This is
+// a backstop that truncates oversized input before the call so it degrades
+// gracefully instead of failing. Per-call-sites also bound their own context.
+const MAX_INPUT_CHARS = Number(process.env.LLM_MAX_INPUT_CHARS ?? 500_000)
+
+function clampMessages(messages: AICompletionOptions['messages']): AICompletionOptions['messages'] {
+  const total = messages.reduce((sum, m) => sum + (m.content?.length ?? 0), 0)
+  if (total <= MAX_INPUT_CHARS) return messages
+  // Trim the single largest message to bring the total under the cap.
+  let largestIdx = 0
+  for (let i = 1; i < messages.length; i++) {
+    if ((messages[i].content?.length ?? 0) > (messages[largestIdx].content?.length ?? 0)) largestIdx = i
+  }
+  const overflow = total - MAX_INPUT_CHARS
+  const largest = messages[largestIdx]
+  const keep = Math.max(0, (largest.content?.length ?? 0) - overflow - 100)
+  const clamped = messages.slice()
+  clamped[largestIdx] = {
+    ...largest,
+    content: (largest.content ?? '').slice(0, keep) + '\n\n[... input truncated to fit the model context window ...]',
+  }
+  return clamped
+}
+
 /** Wrap a client so every complete() checks the org budget first and logs after. */
 function withUsageTracking(client: AIProviderClient, orgId: string): AIProviderClient {
   const originalComplete = client.complete.bind(client)
   client.complete = async (opts: AICompletionOptions): Promise<AICompletionResult> => {
+    opts = { ...opts, messages: clampMessages(opts.messages) }
     await assertWithinBudget(orgId)
     try {
       const result = await originalComplete(opts)

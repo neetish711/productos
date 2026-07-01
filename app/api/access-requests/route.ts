@@ -9,6 +9,8 @@ const requestSchema = z.object({
   name: z.string().min(1),
   email: z.string().email(),
   password: z.string().min(8),
+  // AUDIT S2-8: accepted but treated as a non-binding hint. The granted role is
+  // decided by an admin at approval time, never by this public payload.
   requestedRole: z.string().default('VIEWER'),
   organizationId: z.string().optional(),
   reason: z.string().default(''),
@@ -42,31 +44,20 @@ export async function POST(req: Request) {
 
     const passwordHash = await bcrypt.hash(body.password, 12)
 
+    // AUDIT S2-8: persist the request WITH the password hash but do NOT create a
+    // User. No login exists until an admin approves and assigns a role. This
+    // prevents account pre-seeding / squatting and self-selected privilege.
     const request = await prisma.accessRequest.create({
       data: {
         name: body.name,
         email: body.email,
-        requestedRole: body.requestedRole,
+        passwordHash,
+        requestedRole: body.requestedRole, // stored for admin reference only
         organizationId: orgId,
         reason: body.reason,
         status: 'PENDING',
       },
     })
-
-    // Store the password hash temporarily in a way we can use it when approved
-    // We store it as a separate field approach: create the user as PENDING
-    if (orgId) {
-      await prisma.user.create({
-        data: {
-          name: body.name,
-          email: body.email,
-          passwordHash,
-          role: body.requestedRole,
-          status: 'PENDING',
-          organizationId: orgId,
-        },
-      })
-    }
 
     return NextResponse.json({ success: true, id: request.id }, { status: 201 })
   } catch (err) {

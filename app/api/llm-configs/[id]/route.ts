@@ -1,12 +1,22 @@
 import { NextResponse } from 'next/server'
-import { getOrgId } from '@/lib/auth/utils'
+import { getServerSession } from 'next-auth'
+import { authConfig } from '@/lib/auth/config'
 import { prisma } from '@/lib/db'
 import { decrypt, encrypt, maskApiKey } from '@/lib/encryption'
 import { createAIClient } from '@/lib/ai/provider'
+import { canAccessAdminPanel } from '@/lib/permissions'
+
+// AUDIT S2-5: LLM config is admin-only (holds org-wide encrypted keys).
+async function requireLlmAdminOrgId() {
+  const session = await getServerSession(authConfig)
+  if (!session?.user || !canAccessAdminPanel(session.user.role)) return null
+  return session.user.organizationId
+}
 
 export async function PUT(req: Request, { params }: { params: { id: string } }) {
   try {
-    const orgId = await getOrgId()
+    const orgId = await requireLlmAdminOrgId()
+    if (!orgId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     const existing = await prisma.lLMConfig.findFirst({ where: { id: params.id, organizationId: orgId } })
     if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     const body = await req.json()
@@ -28,7 +38,8 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
 
 export async function DELETE(_: Request, { params }: { params: { id: string } }) {
   try {
-    const orgId = await getOrgId()
+    const orgId = await requireLlmAdminOrgId()
+    if (!orgId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     const existing = await prisma.lLMConfig.findFirst({ where: { id: params.id, organizationId: orgId } })
     if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     await prisma.lLMConfig.delete({ where: { id: params.id } })
@@ -38,7 +49,8 @@ export async function DELETE(_: Request, { params }: { params: { id: string } })
 
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
   try {
-    const orgId = await getOrgId()
+    const orgId = await requireLlmAdminOrgId()
+    if (!orgId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     const existing = await prisma.lLMConfig.findFirst({ where: { id: params.id, organizationId: orgId } })
     if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     const body = await req.json()
@@ -74,7 +86,8 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 // Test connection with stored key
 export async function POST(req: Request, { params }: { params: { id: string } }) {
   try {
-    const orgId = await getOrgId()
+    const orgId = await requireLlmAdminOrgId()
+    if (!orgId) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     const config = await prisma.lLMConfig.findFirst({ where: { id: params.id, organizationId: orgId } })
     if (!config) return NextResponse.json({ error: 'Not found' }, { status: 404 })
     const apiKey = decrypt(config.apiKeyEncrypted, config.iv)

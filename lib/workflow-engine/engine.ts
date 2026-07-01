@@ -1,6 +1,19 @@
 import { prisma } from '@/lib/db'
 import { getAIClient } from '@/lib/ai/provider'
 import type { WorkflowDefinition, WorkflowContext, WorkflowStepResult } from '@/types/workflow'
+import { competitorRefreshWorkflow } from './definitions/competitor-refresh'
+import { competitorDeepAnalysisWorkflow } from './definitions/competitor-deep-analysis'
+
+// AUDIT S2-1: registry so the queue worker can resolve a persisted run's type
+// back to its definition without the HTTP route.
+const WORKFLOW_REGISTRY: Record<string, WorkflowDefinition> = {
+  COMPETITOR_REFRESH: competitorRefreshWorkflow,
+  COMPETITOR_DEEP_ANALYSIS: competitorDeepAnalysisWorkflow,
+}
+
+// A run whose execution began more than this ago with no completion is
+// considered dead and is reaped (marked FAILED) rather than wedging forever.
+const RUN_TIMEOUT_MS = 15 * 60 * 1000
 
 /**
  * Pre-flight check: validate that the competitor has required data for the workflow.
@@ -42,10 +55,18 @@ export async function getInFlightRun(
   orgId: string,
   competitorId?: string,
 ): Promise<{ id: string; status: string } | null> {
+  // AUDIT S2-1: treat QUEUED and (fresh) RUNNING as in-flight, but IGNORE stale
+  // RUNNING runs (startedAt older than the timeout). Previously any RUNNING row —
+  // including one left behind by a dead serverless process — blocked the
+  // competitor's workflows permanently. Stale runs are reaped separately.
+  const cutoff = new Date(Date.now() - RUN_TIMEOUT_MS)
   const where: any = {
     organizationId: orgId,
     workflowType,
-    status: 'RUNNING',
+    OR: [
+      { status: 'QUEUED' },
+      { status: 'RUNNING', startedAt: { gte: cutoff } },
+    ],
   }
   if (competitorId) {
     where.inputParamsJson = { contains: competitorId }
@@ -83,16 +104,94 @@ export async function runWorkflow(
     })
   }
 
-  // Run steps asynchronously (fire-and-forget from API perspective)
-  executeSteps(run.id, definition, ctx).catch(async (err) => {
-    console.error(`Workflow ${run.id} failed:`, err)
-    await prisma.workflowRun.update({
-      where: { id: run.id },
-      data: { status: 'FAILED', errorMessage: err instanceof Error ? err.message : 'Unknown error' },
+  // AUDIT S2-1: the run is now QUEUED and executed by the durable queue worker,
+  // not a detached fire-and-forget promise (which died when the serverless
+  // function returned, leaving the run stuck in RUNNING forever). We kick a
+  // best-effort immediate drain so it starts promptly; if this process dies, the
+  // workflow-drain cron picks it up and the reaper clears anything stuck.
+  void drainWorkflowQueue().catch((err) => console.error('drainWorkflowQueue error:', err))
+
+  return { id: run.id, status: 'QUEUED' }
+}
+
+/**
+ * AUDIT S2-1: atomically claim a QUEUED run for execution. Returns false if
+ * another worker already claimed it (guards against double-execution).
+ */
+async function claimRun(runId: string): Promise<boolean> {
+  const res = await prisma.workflowRun.updateMany({
+    where: { id: runId, status: 'QUEUED' },
+    data: { status: 'RUNNING', startedAt: new Date() },
+  })
+  return res.count === 1
+}
+
+/**
+ * AUDIT S2-1: reaper. Fails runs that have been RUNNING past the timeout with no
+ * completion (e.g. the worker process died mid-run), so they stop wedging the
+ * competitor and are visibly FAILED rather than eternally "running".
+ */
+export async function reapStaleRuns(): Promise<number> {
+  const cutoff = new Date(Date.now() - RUN_TIMEOUT_MS)
+  const stale = await prisma.workflowRun.findMany({
+    where: { status: 'RUNNING', startedAt: { lt: cutoff } },
+    select: { id: true },
+  })
+  for (const r of stale) {
+    await prisma.workflowStepRun.updateMany({
+      where: { workflowRunId: r.id, status: 'RUNNING' },
+      data: { status: 'FAILED', outputJson: JSON.stringify({ error: 'Timed out — reaped' }), completedAt: new Date() },
     })
+    await prisma.workflowRun.update({
+      where: { id: r.id },
+      data: { status: 'FAILED', errorMessage: 'Workflow exceeded the time limit and was reaped', completedAt: new Date() },
+    })
+  }
+  return stale.length
+}
+
+/**
+ * AUDIT S2-1: the queue worker. Reaps stale runs, then claims and executes up to
+ * `limit` QUEUED runs to completion. Safe to call concurrently (claim is atomic)
+ * and idempotent — call it from the workflow-drain cron and after enqueue.
+ */
+export async function drainWorkflowQueue(limit = 3): Promise<{ processed: number; reaped: number }> {
+  const reaped = await reapStaleRuns()
+  const queued = await prisma.workflowRun.findMany({
+    where: { status: 'QUEUED' },
+    orderBy: { createdAt: 'asc' },
+    take: limit,
   })
 
-  return { id: run.id, status: 'RUNNING' }
+  let processed = 0
+  for (const run of queued) {
+    if (!(await claimRun(run.id))) continue // another worker took it
+
+    const definition = WORKFLOW_REGISTRY[run.workflowType]
+    if (!definition) {
+      await prisma.workflowRun.update({
+        where: { id: run.id },
+        data: { status: 'FAILED', errorMessage: `Unknown workflow type: ${run.workflowType}`, completedAt: new Date() },
+      })
+      continue
+    }
+
+    const ctx: WorkflowContext = {
+      orgId: run.organizationId,
+      params: JSON.parse(run.inputParamsJson || '{}'),
+    }
+    try {
+      await executeSteps(run.id, definition, ctx)
+    } catch (err) {
+      await prisma.workflowRun.update({
+        where: { id: run.id },
+        data: { status: 'FAILED', errorMessage: err instanceof Error ? err.message : 'Unknown error', completedAt: new Date() },
+      })
+    }
+    processed++
+  }
+
+  return { processed, reaped }
 }
 
 async function executeSteps(

@@ -3,7 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authConfig } from '@/lib/auth/config'
 import { prisma } from '@/lib/db'
 import { z } from 'zod'
-import { ROLE_DEFAULTS } from '@/lib/permissions'
+import { ROLE_DEFAULTS, canAssignRole } from '@/lib/permissions'
 
 const reviewSchema = z.object({
   action: z.enum(['APPROVE', 'REJECT']),
@@ -37,44 +37,50 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     }
 
     if (body.action === 'APPROVE') {
-      const assignedRole = body.role || request.requestedRole
+      if (!request.organizationId) {
+        return NextResponse.json({ error: 'Request has no organization to approve into' }, { status: 400 })
+      }
+      if (!request.passwordHash) {
+        return NextResponse.json({ error: 'Request predates the new flow and has no stored password. Ask the applicant to re-submit.' }, { status: 400 })
+      }
+
+      // AUDIT S2-8: the granted role is chosen by the admin (defaults to the
+      // lowest role), NOT the applicant's requestedRole, and must be within the
+      // reviewer's assignable range.
+      const assignedRole = body.role || 'VIEWER'
+      if (!canAssignRole(role, assignedRole)) {
+        return NextResponse.json({ error: `You are not permitted to assign the role ${assignedRole}` }, { status: 403 })
+      }
       const defaultPermissions = ROLE_DEFAULTS[assignedRole] || ROLE_DEFAULTS.VIEWER
 
-      // Update the pending user to approved
-      const user = await prisma.user.findFirst({
-        where: { email: request.email, status: 'PENDING' },
+      // AUDIT S2-8: the User is created here (on approval), not at request time.
+      const existing = await prisma.user.findUnique({ where: { email: request.email } })
+      if (existing) {
+        return NextResponse.json({ error: 'A user with this email already exists' }, { status: 409 })
+      }
+      const user = await prisma.user.create({
+        data: {
+          name: request.name,
+          email: request.email,
+          passwordHash: request.passwordHash,
+          role: assignedRole,
+          status: 'APPROVED',
+          organizationId: request.organizationId,
+          permissionsJson: JSON.stringify(defaultPermissions),
+        },
       })
 
-      if (user) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: {
-            role: assignedRole,
-            status: 'APPROVED',
-            permissionsJson: JSON.stringify(defaultPermissions),
-          },
+      // Assign product access (verify products belong to this org — AUDIT P0-9 pattern).
+      const requestedIds: string[] = body.productIds || JSON.parse(request.requestedProductsJson || '[]')
+      const orgProducts = await prisma.product.findMany({
+        where: { organizationId: request.organizationId, ...(requestedIds.length > 0 ? { id: { in: requestedIds } } : {}) },
+        select: { id: true },
+      })
+      if (orgProducts.length > 0) {
+        await (prisma.userProductAccess.createMany as any)({
+          data: orgProducts.map((p) => ({ userId: user.id, productId: p.id })),
+          skipDuplicates: true,
         })
-
-        // Assign product access
-        const productIds = body.productIds || JSON.parse(request.requestedProductsJson || '[]')
-        if (productIds.length > 0) {
-          await (prisma.userProductAccess.createMany as any)({
-            data: productIds.map((pid: string) => ({ userId: user.id, productId: pid })),
-            skipDuplicates: true,
-          })
-        } else {
-          // Grant access to all products in the org
-          const products = await prisma.product.findMany({
-            where: { organizationId: session.user.organizationId },
-            select: { id: true },
-          })
-          if (products.length > 0) {
-            await (prisma.userProductAccess.createMany as any)({
-              data: products.map((p) => ({ userId: user.id, productId: p.id })),
-              skipDuplicates: true,
-            })
-          }
-        }
       }
 
       await prisma.accessRequest.update({
@@ -87,7 +93,7 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
         },
       })
     } else {
-      // Reject
+      // Reject — no User was ever created, so just close the request.
       await prisma.accessRequest.update({
         where: { id: params.id },
         data: {
@@ -97,17 +103,6 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
           reviewNote: body.reviewNote,
         },
       })
-
-      // Also mark the pending user as rejected
-      const user = await prisma.user.findFirst({
-        where: { email: request.email, status: 'PENDING' },
-      })
-      if (user) {
-        await prisma.user.update({
-          where: { id: user.id },
-          data: { status: 'REJECTED' },
-        })
-      }
     }
 
     return NextResponse.json({ success: true })
