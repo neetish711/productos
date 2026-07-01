@@ -216,6 +216,18 @@ function UploadZone({ config, phase, onDrop, onCancel, onParse, onReset }: ZoneP
                 </span>
               )}
             </div>
+            {/* AUDIT S4-import: surface specific skip reasons (e.g. missing feature/competitor)
+                instead of only a silent skipped count. */}
+            {Array.isArray(phase.result.errors) && (phase.result.errors as string[]).length > 0 && (
+              <ul className="mt-2 space-y-0.5 rounded border border-amber-300 bg-amber-50 p-2 text-xs text-amber-800">
+                {(phase.result.errors as string[]).slice(0, 10).map((err, i) => (
+                  <li key={i}>• {err}</li>
+                ))}
+                {(phase.result.errors as string[]).length > 10 && (
+                  <li className="text-amber-600">…and {(phase.result.errors as string[]).length - 10} more</li>
+                )}
+              </ul>
+            )}
             <Button variant="ghost" size="sm" className="h-7 text-xs mt-1" onClick={onReset}>
               <RefreshCw className="h-3 w-3 mr-1" />Upload another file
             </Button>
