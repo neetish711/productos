@@ -20,7 +20,10 @@ npm run db:reset     # Reset DB + re-seed (destructive)
 npx prisma generate  # Regenerate Prisma client after schema changes
 npx tsx prisma/migrate-rbac.ts     # Run RBAC migration (sets permissions for existing users)
 npx tsx prisma/setup-super-admin.ts # Create/upgrade designated Super Admin
+npx tsc --noEmit     # Type-check without emitting (no test framework is configured)
 ```
+
+> No automated test framework (Jest/Vitest/Playwright) is set up. The only static checks are `npm run lint` and `npx tsc --noEmit`; verify changes by running the dev server.
 
 ## Tech Stack
 
@@ -49,7 +52,7 @@ npx tsx prisma/setup-super-admin.ts # Create/upgrade designated Super Admin
 - **Path alias**: `@/*` maps to project root (e.g., `@/lib/db`, `@/components/ui`)
 - **Org-scoped data**: Every DB query filters by `organizationId` from the session JWT. The session carries `id`, `role`, `status`, `organizationId`, `organizationSlug`, `onboardingCompleted`, and `permissions`.
 - **Product-scoped data**: All modules (roadmap, features, competitors, accounts, specs, comparisons, battle cards) filter by selected product via `lib/product-context.ts`. Selected product stored in cookie (`selectedProductId`). Use `getSelectedProductId()` and `getAccessibleProductIds()` for server components. API routes read product from cookie via `getProductIdFromRequest(req)`.
-- **RBAC**: `lib/permissions.ts` defines 26 permissions across 7 modules. Role hierarchy: SUPER_ADMIN (Level 1) > SENIOR_PM (Level 2) > PM (Level 3) > CSM/SALES/PSD/ENGINEERING (Level 4). Admin panel visible to SUPER_ADMIN, SENIOR_PM, PM. Use `hasPermission()`, `isAdmin()`, `canAccessAdminPanel()`, `canAssignRole()` helpers. Permissions stored as JSON array on User model (`permissionsJson`).
+- **RBAC**: `lib/permissions.ts` defines 25 permissions across 7 modules (Roadmap, Competitors, Specs, Features, Ideas, Review, Admin). Role hierarchy: SUPER_ADMIN (Level 1) > SENIOR_PM (Level 2) > PM (Level 3) > CSM/SALES/PSD/ENGINEERING (Level 4). Admin panel visible to SUPER_ADMIN, SENIOR_PM, PM. Use `hasPermission()`, `isAdmin()`, `canAccessAdminPanel()`, `canAssignRole()` helpers. Permissions stored as JSON array on User model (`permissionsJson`).
 - **User status**: PENDING, APPROVED, REJECTED, DEACTIVATED. Only APPROVED users can log in. New registrations create PENDING users requiring admin approval.
 - **Auth middleware**: `middleware.ts` enforces auth on all routes except public paths. Admin routes restricted to `ADMIN_PANEL_ROLES`.
 - **AI provider abstraction**: `lib/ai/provider.ts` — factory pattern with `getAIClient(orgId)` that reads encrypted API keys from DB (falls back to env vars). Supports role-specific configs via `getAIClientForRole()`.
@@ -64,7 +67,7 @@ npx tsx prisma/setup-super-admin.ts # Create/upgrade designated Super Admin
 - **File parsers**: `lib/file-parsers/` — CSV, XLSX, PDF, DOCX parsing for feature import.
 - **State stores**: `store/product.store.ts`, `store/spec.store.ts`, `store/ui.store.ts`, `store/workflow.store.ts` (Zustand).
 - **Review workflow**: Specs support lifecycle states: DRAFT → SUBMITTED → APPROVED/REJECTED/CHANGES_REQUESTED. Permission-gated via `submit_for_review`, `approve_story`, `reject_story`.
-- **Prompt templates**: 17 auto-seeded templates across spec-generation, competitive-intelligence, roadmap, and account-intelligence categories. Seeded on first access via `GET /api/prompts`.
+- **Prompt templates**: ~18 auto-seeded templates across 5 categories (spec-generation, competitive-intelligence, roadmap, account-intelligence, lovable-generation). Defined inline in `app/api/prompts/route.ts` and seeded per-org on first access via `GET /api/prompts` (idempotent upsert keyed by category + name).
 
 ### Auth Utilities (`lib/auth/utils.ts`)
 
@@ -98,7 +101,7 @@ Requires `DATABASE_URL`, `NEXTAUTH_SECRET`, `NEXTAUTH_URL`, and `ENCRYPTION_SECR
 
 ### Database
 
-SQLite in development (`file:./dev.db`). Prisma schema has ~42 models including AccessRequest, UserProductAccess, Competitor (with `productId`), Account (with `productId`). After any schema change, run `npx prisma generate` then `npm run db:push`.
+SQLite in development (`file:./dev.db`). Prisma schema has 39 models including AccessRequest, UserProductAccess, Competitor (with `productId`), Account (with `productId`). After any schema change, run `npx prisma generate` then `npm run db:push`.
 
 ### Deployment (Railway)
 
